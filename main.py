@@ -2,6 +2,7 @@
 # -*- coding: ascii -*-
 
 import os
+import collections
 import threading
 import argparse
 import logging
@@ -61,6 +62,7 @@ class EuphoriaBridgeBot(basebot.Bot):
             add_users = packet.data
         elif packet.type == 'hello-event':
             self.manager.nexus.ignore_users(({
+                'platform': 'euphoria',
                 'euphoria_id': packet.data['session'].session_id
             },))
         elif packet.type == 'snapshot-event':
@@ -70,6 +72,7 @@ class EuphoriaBridgeBot(basebot.Bot):
             pass
         elif packet.type == 'nick-event':
             self.manager.nexus.add_users(({
+                'platform': 'euphoria',
                 'euphoria_id': packet.data['session_id'],
                 'nick': packet.data['to']
             },))
@@ -79,6 +82,7 @@ class EuphoriaBridgeBot(basebot.Bot):
             remove_users = (packet.data,)
         elif packet.type == 'send-event':
             self.manager.nexus.handle_message({
+                'platform': 'euphoria',
                 'euphoria_id': packet.data.sender.session_id,
                 'nick': packet.data.sender.name,
                 'text': packet.data.content
@@ -86,8 +90,8 @@ class EuphoriaBridgeBot(basebot.Bot):
         # Apply user additions/deletions.
         if add_users:
             self.manager.nexus.add_users(
-                [{'euphoria_id': entry.session_id, 'nick': entry.name}
-                 for entry in add_users])
+                [{'platform': 'euphoria', 'euphoria_id': entry.session_id,
+                  'nick': entry.name} for entry in add_users])
         if remove_users:
             self.manager.nexus.remove_users([{'euphoria_id': entry.session_id}
                                              for entry in remove_users])
@@ -106,7 +110,8 @@ class InstantBridgeBot(InstantBotWrapper):
     def handle_joined(self, content, rawmsg):
         InstantBotWrapper.handle_joined(self, content, rawmsg)
         self.manager.nexus.add_users(({
-            'instant_id': content['data']['id'],
+            'platform': 'instant',
+            'instant_id': content['data']['id']
         },))
 
     def handle_left(self, content, rawmsg):
@@ -119,11 +124,13 @@ class InstantBridgeBot(InstantBotWrapper):
         InstantBotWrapper.on_client_message(self, data, content, rawmsg)
         if data.get('type') == 'nick':
             self.manager.nexus.add_users(({
+                'platform': 'instant',
                 'instant_id': content['from'],
                 'nick': data.get('nick')
             },))
         elif data.get('type') == 'post':
             self.manager.nexus.handle_message({
+                'platform': 'instant',
                 'instant_id': content['from'],
                 'nick': data.get('nick'),
                 'text': data.get('text')
@@ -137,6 +144,8 @@ class InstantSendBot(InstantBotWrapper):
 
 class Nexus:
     def __init__(self):
+        self.euphoria_users = {}
+        self.instant_users = {}
         self.scheduler = instabot.EventScheduler()
         self.lock = threading.RLock()
         self.logger = logging.getLogger('nexus')
@@ -147,17 +156,83 @@ class Nexus:
     def __exit__(self, *args):
         return self.lock.__exit__(*args)
 
-    def add_users(self, users):
-        self.logger.info('Adding users: %r', users)
+    def _get_user(self, query, create=False):
+        euphoria_id = query.get('euphoria_id')
+        instant_id = query.get('instant_id')
+        ret = None
+        if euphoria_id:
+            if euphoria_id in self.euphoria_users:
+                ret = self.euphoria_users[euphoria_id]
+            elif create:
+                ret = {'euphoria_id': euphoria_id}
+                self.euphoria_users[euphoria_id] = ret
+        if instant_id:
+            if instant_id in self.instant_users:
+                ret = self.instant_users[instant_id]
+            elif create:
+                ret = ret or {}
+                ret['instant_id'] = instant_id
+                self.instant_users[instant_id] = ret
+        if create:
+            ret.setdefault('ignore', False)
+            ret.setdefault('nick', None)
+            ret.setdefault('actions', collections.deque())
+            ret.setdefault('platform', None)
+        return ret
+
+    def add_users(self, users, _run=True):
+        pending = []
+        with self.lock:
+            for u in users:
+                entry = self._get_user(u, True)
+                if u.get('platform'):
+                    entry['platform'] = u['platform']
+                if u.get('nick'):
+                    entry['nick'] = u['nick']
+                    entry['actions'].append(u)
+                pending.append(entry)
+            if _run:
+                self.scheduler.add_now(lambda: self._perform_actions(pending))
 
     def remove_users(self, users):
-        self.logger.info('Removing users: %r', users)
+        with self.lock:
+            pending = []
+            for u in users:
+                ui, ue = None, None
+                if 'euphoria_id' in u:
+                    ue = self.euphoria_users.pop(u['euphoria_id'], None)
+                    if ue:
+                        ue['actions'].append({'remove': True})
+                        pending.append(ue)
+                if 'instant_id' in u:
+                    ui = self.instant_users.pop(u['instant_id'], None)
+                    if ui:
+                        ui['actions'].append({'remove': True})
+                        pending.append(ui)
+            self.scheduler.add_now(lambda: self._perform_actions(pending))
 
     def ignore_users(self, users):
-        self.logger.info('Ignoring users: %r', users)
+        with self.lock:
+            self.add_users(users, False)
+            for u in users:
+                entry = self._get_user(u)
+                entry['ignore'] = True
 
     def handle_message(self, data):
-        self.logger.info('Processing message: %r', data)
+        with self.lock:
+            self.add_users((data,), False)
+            entry = self._get_user(data)
+            entry['actions'].append(data)
+            self.scheduler.add_now(lambda: self._perform_actions((entry,)))
+
+    def _perform_actions(self, entries):
+        for e in entries:
+            if e['ignore']: continue
+            self.logger.info('Committing %r', e)
+
+    def start(self):
+        # TODO: Make Nexus a proper BotManager child.
+        basebot.spawn_thread(self.scheduler.main)
 
 def logger_name(platform, room, nick):
     if room in (None, Ellipsis): room = '???'
@@ -217,6 +292,7 @@ def main():
         roomname=arguments.instant_room, nickname=NICKNAME))
     euph_mgr.add_child(inst_mgr)
     try:
+        nexus.start()
         euph_mgr.main()
     except (KeyboardInterrupt, SystemExit) as exc:
         euph_mgr.shutdown()
