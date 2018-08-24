@@ -137,24 +137,60 @@ class InstantBridgeBot(InstantBotWrapper):
             })
 
 class EuphoriaSendBot(basebot.HeimEndpoint):
-    pass
+    def __init__(self, roomname=None, **config):
+        config.setdefault('roomname', roomname)
+        basebot.HeimEndpoint.__init__(self, **config)
+        self.ready = False
+        self.on_ready = config.get('on_ready')
+
+    def handle_login(self):
+        basebot.HeimEndpoint.handle_login(self)
+        if not self.ready:
+            self.ready = True
+            if self.on_ready: self.on_ready()
 
 class InstantSendBot(InstantBotWrapper):
-    pass
+    def __init__(self, url, nickname=None, **kwds):
+        InstantBotWrapper.__init__(self, url, nickname, **kwds)
+        self.ready = False
+        self.on_ready = kwds.get('on_ready')
+
+    def handle_identity(self, content, rawmsg):
+        InstantBotWrapper.handle_identity(self, content, rawmsg)
+        if not self.ready:
+            self.ready = True
+            if self.on_ready: self.on_ready()
 
 class Nexus:
     def __init__(self):
         self.euphoria_users = {}
         self.instant_users = {}
+        self.bots = {}
         self.scheduler = instabot.EventScheduler()
         self.lock = threading.RLock()
+        self.bot_lock = threading.RLock()
         self.logger = logging.getLogger('nexus')
 
-    def __enter__(self):
-        return self.lock.__enter__()
+    def _bot_ident(self, entry):
+        if entry['platform'] == 'euphoria':
+            return 'e/' + entry['euphoria_id']
+        else:
+            return 'i/' + entry['instant_id']
 
-    def __exit__(self, *args):
-        return self.lock.__exit__(*args)
+    def get_bot(self, entry, on_ready):
+        identity = self._bot_ident(entry)
+        with self.bot_lock:
+            if identity not in self.bots:
+                self.bots[identity] = self.make_bot(entry, on_ready)
+            return self.bots[identity]
+
+    def remove_bot(self, entry):
+        identity = self._bot_ident(entry)
+        with self.bot_lock:
+            self.bots.pop(identity, None)
+
+    def make_bot(self, entry, on_ready):
+        return None
 
     def _get_user(self, query, create=False):
         euphoria_id = query.get('euphoria_id')
@@ -226,9 +262,26 @@ class Nexus:
             self.scheduler.add_now(lambda: self._perform_actions((entry,)))
 
     def _perform_actions(self, entries):
+        def make_runner(e):
+            # Has to be a closure because e is a loop variable.
+            return lambda: self._perform_actions((e,))
         for e in entries:
-            if e['ignore']: continue
-            self.logger.info('Committing %r', e)
+            if e['ignore']:
+                continue
+            bot = self.get_bot(e, make_runner(e))
+            if not bot.ready: continue
+            while 1:
+                try:
+                    action = e['actions'].popleft()
+                except IndexError:
+                    break
+                if 'nick' in action and action['nick'] != bot.nickname:
+                    bot.set_nickname(action['nick'])
+                if 'text' in action:
+                    pass # NYI
+                if action.get('remove'):
+                    bot.close()
+                    self.remove_bot(e)
 
     def start(self):
         # TODO: Make Nexus a proper BotManager child.
@@ -270,6 +323,17 @@ class InstantBotManager(basebot.BotManager):
                                            nickname, logger, **config)
 
 def main():
+    def make_bot(entry, on_ready):
+        if entry['platform'] == 'euphoria':
+            bot = euph_mgr.make_bot(roomname=arguments.euphoria_room,
+                                    on_ready=on_ready)
+            euph_mgr.add_bot(bot)
+        else:
+            bot = inst_mgr.make_bot(roomname=arguments.instant_room,
+                                    on_ready=on_ready)
+            inst_mgr.add_bot(bot)
+        bot.start()
+        return bot
     p = argparse.ArgumentParser()
     p.add_argument('--loglevel', default='INFO',
                    help='Logging level to use')
@@ -282,6 +346,7 @@ def main():
     logging.basicConfig(format='[%(asctime)s %(name)s %(levelname)s] '
         '%(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=loglevel)
     nexus = Nexus()
+    nexus.make_bot = make_bot
     euph_mgr = EuphoriaBotManager(botcls=EuphoriaSendBot,
         botname='EuphoriaBridge', nexus=nexus)
     inst_mgr = InstantBotManager(botcls=InstantSendBot,
