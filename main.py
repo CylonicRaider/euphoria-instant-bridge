@@ -14,29 +14,51 @@ INSTANT_ROOM_TEMPLATE = os.environ.get('INSTANT_ROOM_TEMPLATE',
 
 NICKNAME = 'bridge'
 
-class EuphoriaSendBot(basebot.HeimEndpoint):
-    pass
-
-class InstantSendBot(instabot.Bot):
+# We shoehorn instabot Bot-s into the interface expected by basebot in order
+# to leverage the latter's more powerful tools.
+class InstantBotWrapper(instabot.Bot):
     def __init__(self, url, nickname=Ellipsis, **kwds):
         instabot.Bot.__init__(self, url, nickname, **kwds)
         self.manager = kwds.get('manager')
+        self.logger = kwds.get('logger', logging.getLogger())
         self.lock = threading.RLock()
+        self._sent_nick = Ellipsis
+
+    def connect(self):
+        self.logger.info('Connecting to %s...', self.url)
+        return instabot.Bot.connect(self)
+
+    def on_open(self):
+        instabot.Bot.on_open(self)
+        self.logger.info('Connected')
 
     def on_close(self):
         instabot.Bot.on_close(self)
+        self.logger.info('Closing')
         # FIXME: Instabot does not expose the "ok" and "final" parameters.
         if self.manager: self.manager.handle_close(self, True, True)
+
+    def send_nick(self, peer=None):
+        if self.nickname != self._sent_nick:
+            self.logger.info('Setting nickname: %r', self.nickname)
+            self._sent_nick = self.nickname
+        return instabot.Bot.send_nick(self, peer)
+
+    def set_nickname(self, nick=Ellipsis):
+        if nick is not Ellipsis: self.nickname = nick
+        self.send_nick()
+
+class EuphoriaSendBot(basebot.HeimEndpoint):
+    pass
+
+class InstantSendBot(InstantBotWrapper):
+    pass
 
 class InstantBotManager(basebot.BotManager):
     def make_bot(self, roomname=Ellipsis, passcode=Ellipsis,
                  nickname=Ellipsis, logger=Ellipsis, **config):
         if passcode is not Ellipsis:
             raise TypeError('Instant bots do not have passcodes')
-        if logger in (None, Ellipsis):
-            logger = None
-        else:
-            raise TypeError('Instant sending bots do not have loggers')
         if roomname is not Ellipsis:
             config['url'] = INSTANT_ROOM_TEMPLATE.format(roomname)
             roomname = Ellipsis
