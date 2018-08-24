@@ -54,6 +54,20 @@ class EuphoriaSendBot(basebot.HeimEndpoint):
 class InstantSendBot(InstantBotWrapper):
     pass
 
+def logger_name(platform, room, nick):
+    if room in (None, Ellipsis): room = '???'
+    if nick in (None, Ellipsis): nick = '???'
+    return '%s@%s/%s' % (nick, platform, room)
+
+class EuphoriaBotManager(basebot.BotManager):
+    def make_bot(self, roomname=Ellipsis, passcode=Ellipsis,
+                 nickname=Ellipsis, logger=Ellipsis, **config):
+        if logger is Ellipsis:
+            logger = logging.getLogger(logger_name('euphoria', roomname,
+                                                   nickname))
+        return basebot.BotManager.make_bot(self, roomname, passcode, nickname,
+                                           logger, **config)
+
 class InstantBotManager(basebot.BotManager):
     def make_bot(self, roomname=Ellipsis, passcode=Ellipsis,
                  nickname=Ellipsis, logger=Ellipsis, **config):
@@ -61,7 +75,9 @@ class InstantBotManager(basebot.BotManager):
             raise TypeError('Instant bots do not have passcodes')
         if roomname is not Ellipsis:
             config['url'] = INSTANT_ROOM_TEMPLATE.format(roomname)
-            roomname = Ellipsis
+        if logger is Ellipsis:
+            logger = logging.getLogger(logger_name('instant', roomname,
+                                                   nickname))
         return basebot.BotManager.make_bot(self, Ellipsis, Ellipsis,
                                            nickname, logger, **config)
 
@@ -77,7 +93,7 @@ def main():
     loglevel = arguments.loglevel
     logging.basicConfig(format='[%(asctime)s %(name)s %(levelname)s] '
         '%(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=loglevel)
-    euph_mgr = basebot.BotManager(botcls=EuphoriaSendBot,
+    euph_mgr = EuphoriaBotManager(botcls=EuphoriaSendBot,
                                   botname='EuphoriaBridge')
     inst_mgr = InstantBotManager(botcls=InstantSendBot,
                                  botname='InstantBridge')
