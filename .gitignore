@@ -1,0 +1,5 @@
+# Files to be ignored by Git #
+
+# Python bytecode
+*.py[co]
+__pycache__/
