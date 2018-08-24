@@ -2,6 +2,7 @@
 # -*- coding: ascii -*-
 
 import os
+import threading
 import argparse
 import logging
 
@@ -11,11 +12,21 @@ import instabot
 INSTANT_ROOM_TEMPLATE = os.environ.get('INSTANT_ROOM_TEMPLATE',
                                        'wss://instant.leet.nu/room/{}/ws')
 
+NICKNAME = 'bridge'
+
 class EuphoriaSendBot(basebot.HeimEndpoint):
     pass
 
 class InstantSendBot(instabot.Bot):
-    pass
+    def __init__(self, url, nickname=Ellipsis, **kwds):
+        instabot.Bot.__init__(self, url, nickname, **kwds)
+        self.manager = kwds.get('manager')
+        self.lock = threading.RLock()
+
+    def on_close(self):
+        instabot.Bot.on_close(self)
+        # FIXME: Instabot does not expose the "ok" and "final" parameters.
+        if self.manager: self.manager.handle_close(self, True, True)
 
 class InstantBotManager(basebot.BotManager):
     def make_bot(self, roomname=Ellipsis, passcode=Ellipsis,
@@ -44,15 +55,20 @@ def main():
     loglevel = arguments.loglevel
     logging.basicConfig(format='[%(asctime)s %(name)s %(levelname)s] '
         '%(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=loglevel)
-    mgr = basebot.BotManager(botcls=EuphoriaSendBot,
-                             botname='EuphoriaBridge')
-    mgr.add_child(InstantBotManager(botcls=InstantSendBot,
-                                    botname='InstantBridge'))
+    euph_mgr = basebot.BotManager(botcls=EuphoriaSendBot,
+                                  botname='EuphoriaBridge')
+    inst_mgr = InstantBotManager(botcls=InstantSendBot,
+                                 botname='InstantBridge')
+    euph_mgr.add_bot(euph_mgr.make_bot(roomname=arguments.euphoria_room,
+        nickname=NICKNAME))
+    inst_mgr.add_bot(inst_mgr.make_bot(roomname=arguments.instant_room,
+        nickname=NICKNAME))
+    euph_mgr.add_child(inst_mgr)
     try:
-        mgr.main()
+        euph_mgr.main()
     except (KeyboardInterrupt, SystemExit) as exc:
-        mgr.shutdown()
-        mgr.join()
+        euph_mgr.shutdown()
+        euph_mgr.join()
         if isinstance(exc, SystemExit): raise
 
 if __name__ == '__main__': main()
