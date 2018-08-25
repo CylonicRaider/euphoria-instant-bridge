@@ -6,6 +6,7 @@ import collections
 import threading
 import argparse
 import logging
+import sqlite3
 
 import basebot
 import instabot
@@ -15,6 +16,10 @@ INSTANT_ROOM_TEMPLATE = os.environ.get('INSTANT_ROOM_TEMPLATE',
 
 NICKNAME = 'bridge'
 SURROGATE_DELAY = 2
+
+# UNIX timestampf for 2014-12-00 00:00:00 UTC. Note that the original
+# definition has an off-by-one error.
+EUPHORIA_ID_EPOCH = 1417305600
 
 # We shoehorn instabot Bot-s into the interface expected by basebot in order
 # to leverage the latter's more powerful tools.
@@ -171,15 +176,117 @@ class InstantSendBot(InstantBotWrapper):
             self.ready = True
             if self.on_ready: self.on_ready()
 
+def euphoria_id_to_timestamp(msgid):
+    # The return value is a UNIX timestamp in milliseconds.
+    return (int(msgid, 36) >> 22) + EUPHORIA_ID_EPOCH * 1000
+
+def timestamp_to_instant_id(ts, sequence):
+    # ts is a timestamp as returned by euphoria_id_to_timestamp(), sequence
+    # should be in the [0, 1024) range, and the return value is a proper
+    # string representation.
+    return '%016X' % ((ts << 10) + sequence)
+
+class MessageStore:
+    def __init__(self, dbname=None):
+        if dbname is None: dbname = ':memory:'
+        self.dbname = dbname
+        self.conn = None
+        self.curs = None
+        self.lock = threading.RLock()
+
+    def init(self):
+        self.conn = sqlite3.connect(self.dbname, check_same_thread=False)
+        self.curs = self.conn.cursor()
+        # Either ID can be null to signal that it is not available yet.
+        self.curs.execute('CREATE TABLE IF NOT EXISTS id_map ( '
+                'euphoria TEXT UNIQUE, '
+                'instant TEXT UNIQUE'
+            ')')
+
+    def close(self):
+        with self.lock:
+            try:
+                self.curs.close()
+            except Exception:
+                pass
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+
+    def translate_ids(self, platform, ids, create=False):
+        with self.lock:
+            ret = dict.fromkeys(ids, Ellipsis)
+            if platform == 'euphoria':
+                for i in ids:
+                    self.curs.execute('SELECT euphoria, instant '
+                        'FROM msgid_map WHERE euphoria = ?', (i,))
+                    res = self.curs.fetchone()
+                    if res is not None: ret[res[0]] = res[1]
+            else:
+                for i in ids:
+                    self.curs.execute('SELECT instant, euphoria '
+                        'FROM msgid_map WHERE instant = ?', (i,))
+                    res = self.curs.fetchone()
+                    if res is not None: ret[res[0]] = res[1]
+            if create:
+                for k in ret:
+                    if ret[k] is Ellipsis:
+                        ret[k] = self.generate_id(platform, k)
+            return ret
+
+    def generate_id(self, platform, original):
+        # platform is the platform of original.
+        with self.lock:
+            if platform == 'instant':
+                raise RuntimeError('Cannot generate Euphoria ID-s')
+            ts = euphoria_id_to_timestamp(original)
+            # We iterate down from the highest sequence ID to avoid collisions
+            # with the Instant backend.
+            for seq in range(1023, -1, -1):
+                candidate = timestamp_to_instant_id(ts, seq)
+                try:
+                    self.curs.execute('INSERT '
+                        'INTO msgid_map(euphoria, instant) '
+                        'VALUES (?, ?)', (original, candidate))
+                except sqlite3.IntegrityError:
+                    continue
+                else:
+                    break
+            else:
+                raise RuntimeError('Cannot generate translation for Euphoria '
+                    'ID %r' % original)
+            return candidate
+
+    def update_ids(self, platform, mapping):
+        # platform is the platform of the keys of the mapping.
+        with self.lock:
+            if platform == 'euphoria':
+                items = mapping.items()
+            else:
+                items = [(e, i) for i, e in mapping.items()]
+            for euphoria, instant in mapping:
+                try:
+                    self.curs.execute('INSERT '
+                        'INTO msgid_map(euphoria, instant) '
+                        'VALUES (?, ?)', (euphoria, instant))
+                except sqlite3.IntegrityError:
+                    raise RuntimeError('Cannot install Euphoria:Instant '
+                        'mapping %r:%r' % (euphoria, instant))
+
 class Nexus:
-    def __init__(self):
+    def __init__(self, dbname=None):
         self.euphoria_users = {}
         self.instant_users = {}
         self.bots = {}
+        self.messages = MessageStore(dbname)
         self.scheduler = instabot.EventScheduler()
         self.lock = threading.RLock()
         self.bot_lock = threading.RLock()
         self.logger = logging.getLogger('nexus')
+
+    def close(self):
+        self.messages.close()
 
     def _bot_ident(self, entry):
         if entry['platform'] == 'euphoria':
@@ -307,6 +414,7 @@ class Nexus:
 
     def start(self):
         # TODO: Make Nexus a proper BotManager child.
+        self.messages.init()
         basebot.spawn_thread(self.scheduler.main)
 
 def logger_name(platform, room, nick, botname):
@@ -388,5 +496,7 @@ def main():
         euph_mgr.shutdown()
         euph_mgr.join()
         if isinstance(exc, SystemExit): raise
+    finally:
+        nexus.close()
 
 if __name__ == '__main__': main()
