@@ -42,7 +42,8 @@ class InstantBotWrapper(instabot.Bot):
 
     def send_nick(self, peer=None):
         if self.nickname != self._sent_nick:
-            self.logger.info('Setting nickname: %r', self.nickname)
+            if self.nickname is not None:
+                self.logger.info('Setting nickname: %r', self.nickname)
             self._sent_nick = self.nickname
         return instabot.Bot.send_nick(self, peer)
 
