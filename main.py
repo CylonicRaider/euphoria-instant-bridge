@@ -279,14 +279,15 @@ class MessageStore:
             if create:
                 for k in ret:
                     if ret[k] is Ellipsis:
-                        ret[k] = self.generate_id(platform, k)
+                        ret[k] = self.generate_id(platform, k, _commit=False)
+                self.conn.commit()
             return ret
 
     def translate_id(self, platform, ident, create=False):
         res = self.translate_ids(platform, (ident,), create)
         return res[ident]
 
-    def generate_id(self, platform, original):
+    def generate_id(self, platform, original, _commit=True):
         # platform is the platform of original.
         if platform == 'instant':
             raise RuntimeError('Cannot generate Euphoria ID-s')
@@ -308,6 +309,7 @@ class MessageStore:
                 raise RuntimeError('Cannot generate translation for Euphoria '
                     'ID %r' % original)
             self._run_watchers(original, candidate)
+            self.conn.commit()
             return candidate
 
     def update_ids(self, platform, mapping):
@@ -322,6 +324,7 @@ class MessageStore:
                     'INTO id_map(euphoria, instant) '
                     'VALUES (?, ?)', (euphoria, instant))
                 self._run_watchers(euphoria, instant)
+            self.conn.commit()
 
     def watch_id(self, platform, ident, callback):
         key = (platform, ident)
@@ -477,18 +480,21 @@ class Nexus:
                     bot.set_nickname(action['nick'])
                 if 'text' in action:
                     with self.messages.lock:
-                        tr_parent = self.messages.translate_id(
-                            e['platform'], action['parent'])
+                        try:
+                            tr_parent = self.messages.translate_id(
+                                e['platform'], action['parent'])
+                        except RuntimeError as exc:
+                            self.logger.warning('Could not translate message '
+                                'ID %s/%s: %r', e['platform'],
+                                action['parent'], exc)
+                            continue
                         if (action['parent'] is not None and
                                 tr_parent is None):
                             self.messages.watch_id(action['parent'],
                                                    runner)
                             break
-                        try:
-                            self.messages.update_ids(action['platform'],
-                                {action['msgid']: None})
-                        except RuntimeError:
-                            pass
+                        self.messages.update_ids(action['platform'],
+                            {action['msgid']: None})
                     bot.submit_post(tr_parent, action['text'],
                                     action['msgid'])
                 if action.get('remove'):
@@ -497,6 +503,7 @@ class Nexus:
 
     def start(self):
         # TODO: Make Nexus a proper BotManager child.
+        self.logger.info('Starting...')
         self.messages.init()
         basebot.spawn_thread(self.scheduler.main)
 
@@ -557,6 +564,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--loglevel', default='INFO',
                    help='Logging level to use')
+    p.add_argument('--db', metavar='PATH',
+                   help='Database path (default in-memory)')
     p.add_argument('--euphoria-room', metavar='ROOMNAME', default='test',
                    help='Euphoria room to bridge (default &test)')
     p.add_argument('--instant-room', metavar='ROOMNAME', default='test',
@@ -565,7 +574,7 @@ def main():
     loglevel = arguments.loglevel
     logging.basicConfig(format='[%(asctime)s %(name)s %(levelname)s] '
         '%(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=loglevel)
-    nexus = Nexus()
+    nexus = Nexus(arguments.db)
     nexus.make_bot = make_bot
     bot_counter = [0]
     euph_mgr = EuphoriaBotManager(botcls=EuphoriaSendBot,
