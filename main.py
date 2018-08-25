@@ -70,6 +70,8 @@ class EuphoriaBridgeBot(basebot.Bot):
                 'euphoria_id': packet.data['session'].session_id
             },))
         elif packet.type == 'snapshot-event':
+            self.manager.nexus.gather_ids('euphoria', [msg.id
+                for msg in packet.data['log']])
             add_users = packet.data['listing']
         elif packet.type == 'network-event':
             # TODO: support this
@@ -163,7 +165,7 @@ class EuphoriaSendBot(basebot.HeimEndpoint):
         basebot.HeimEndpoint.handle_any(self, packet)
         if packet.type == 'send-reply':
             if isinstance(packet.id, str) and packet.id.startswith('i:'):
-                self.manager.nexus.handle_mapping({
+                self.manager.nexus.add_mapping({
                     'euphoria': packet.data.id,
                     'instant': packet.id[2:]
                 })
@@ -198,7 +200,7 @@ class InstantSendBot(InstantBotWrapper):
         InstantBotWrapper.handle_response(self, content, rawmsg)
         sequence = content.get('seq')
         if isinstance(sequence, str) and sequence.startswith('e:'):
-            self.manager.nexus.handle_mapping({
+            self.manager.nexus.add_mapping({
                 'euphoria': sequence[2:],
                 'instant': content['data']['id']
             })
@@ -309,7 +311,7 @@ class MessageStore:
                 raise RuntimeError('Cannot generate translation for Euphoria '
                     'ID %r' % original)
             self._run_watchers(original, candidate)
-            self.conn.commit()
+            if _commit: self.conn.commit()
             return candidate
 
     def update_ids(self, platform, mapping):
@@ -454,9 +456,15 @@ class Nexus:
             entry['actions'].append(data)
             self.scheduler.add_now(lambda: self._perform_actions((entry,)))
 
-    def handle_mapping(self, data):
+    def add_mapping(self, data):
         self.messages.update_ids('euphoria',
                                  {data['euphoria']: data['instant']})
+
+    def gather_ids(self, platform, ids):
+        try:
+            self.messages.translate_ids(platform, ids)
+        except RuntimeError as exc:
+            self.logger.warning('Could not gather up message ID-s: %r', exc)
 
     def _perform_actions(self, entries):
         def make_runner(e):
