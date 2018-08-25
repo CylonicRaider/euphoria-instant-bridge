@@ -430,8 +430,9 @@ class EuphoriaBotManager(basebot.BotManager):
     def make_bot(self, roomname=Ellipsis, passcode=Ellipsis,
                  nickname=Ellipsis, logger=Ellipsis, **config):
         if logger is Ellipsis:
+            botname = config.get('botname', self.botname)
             logger = logging.getLogger(logger_name('euphoria', roomname,
-                                                   nickname, self.botname))
+                                                   nickname, botname))
         return basebot.BotManager.make_bot(self, roomname, passcode, nickname,
                                            logger, **config)
 
@@ -447,8 +448,9 @@ class InstantBotManager(basebot.BotManager):
         if roomname is not Ellipsis:
             config['url'] = INSTANT_ROOM_TEMPLATE.format(roomname)
         if logger is Ellipsis:
+            botname = config.get('botname', self.botname)
             logger = logging.getLogger(logger_name('instant', roomname,
-                                                   nickname, self.botname))
+                                                   nickname, botname))
         return basebot.BotManager.make_bot(self, Ellipsis, Ellipsis,
                                            nickname, logger, **config)
 
@@ -456,12 +458,15 @@ def main():
     def make_bot(entry, on_ready):
         # Nexus gives us the data of the original connection, so we swap the
         # platform here.
+        bot_counter[0] += 1
         if entry['platform'] == 'euphoria':
-            bot = inst_mgr.make_bot(roomname=arguments.instant_room,
+            bot = inst_mgr.make_bot(botname='surrogate#%s' % bot_counter[0],
+                                    roomname=arguments.instant_room,
                                     on_ready=on_ready)
             inst_mgr.add_bot(bot)
         else:
-            bot = euph_mgr.make_bot(roomname=arguments.euphoria_room,
+            bot = euph_mgr.make_bot(botname='surrogate#%s' % bot_counter[0],
+                                    roomname=arguments.euphoria_room,
                                     on_ready=on_ready)
             euph_mgr.add_bot(bot)
         bot.start()
@@ -479,6 +484,7 @@ def main():
         '%(message)s', datefmt='%Y-%m-%d %H:%M:%S', level=loglevel)
     nexus = Nexus()
     nexus.make_bot = make_bot
+    bot_counter = [0]
     euph_mgr = EuphoriaBotManager(botcls=EuphoriaSendBot,
         botname='surrogate', nexus=nexus)
     inst_mgr = InstantBotManager(botcls=InstantSendBot,
