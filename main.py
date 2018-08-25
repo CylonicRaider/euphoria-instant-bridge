@@ -312,9 +312,9 @@ class Nexus:
         # TODO: Make Nexus a proper BotManager child.
         basebot.spawn_thread(self.scheduler.main)
 
-def logger_name(platform, room, nick):
+def logger_name(platform, room, nick, botname):
     if room in (None, Ellipsis): room = '???'
-    if nick in (None, Ellipsis): nick = '???'
+    if nick in (None, Ellipsis): nick = '???' if botname is None else botname
     return '%s@%s/%s' % (nick, platform, room)
 
 class EuphoriaBotManager(basebot.BotManager):
@@ -326,7 +326,7 @@ class EuphoriaBotManager(basebot.BotManager):
                  nickname=Ellipsis, logger=Ellipsis, **config):
         if logger is Ellipsis:
             logger = logging.getLogger(logger_name('euphoria', roomname,
-                                                   nickname))
+                                                   nickname, self.botname))
         return basebot.BotManager.make_bot(self, roomname, passcode, nickname,
                                            logger, **config)
 
@@ -375,13 +375,14 @@ def main():
     nexus = Nexus()
     nexus.make_bot = make_bot
     euph_mgr = EuphoriaBotManager(botcls=EuphoriaSendBot,
-        botname='EuphoriaBridge', nexus=nexus)
+        botname='surrogate', nexus=nexus)
     inst_mgr = InstantBotManager(botcls=InstantSendBot,
-        botname='InstantBridge', nexus=nexus)
+        botname='surrogate', nexus=nexus)
     euph_mgr.add_bot(euph_mgr.make_bot(botcls=EuphoriaBridgeBot,
-        roomname=arguments.euphoria_room, nickname=NICKNAME))
+        botname='bridge', roomname=arguments.euphoria_room,
+        nickname=NICKNAME))
     inst_mgr.add_bot(inst_mgr.make_bot(botcls=InstantBridgeBot,
-        roomname=arguments.instant_room, nickname=NICKNAME))
+        botname='bridge', roomname=arguments.instant_room, nickname=NICKNAME))
     euph_mgr.add_child(inst_mgr)
     try:
         nexus.start()
