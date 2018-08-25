@@ -52,10 +52,6 @@ class InstantBotWrapper(instabot.Bot):
         self.send_nick()
 
 class EuphoriaBridgeBot(basebot.Bot):
-    def __init__(self, *args, **kwds):
-        basebot.Bot.__init__(self, *args, **kwds)
-        self.log_users = True
-
     def handle_any(self, packet):
         basebot.Bot.handle_any(self, packet)
         add_users, remove_users, users_new = None, None, False
