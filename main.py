@@ -14,7 +14,7 @@ INSTANT_ROOM_TEMPLATE = os.environ.get('INSTANT_ROOM_TEMPLATE',
                                        'wss://instant.leet.nu/room/{}/ws')
 
 NICKNAME = 'bridge'
-SURROGATE_DELAY = 5
+SURROGATE_DELAY = 2
 
 # We shoehorn instabot Bot-s into the interface expected by basebot in order
 # to leverage the latter's more powerful tools.
