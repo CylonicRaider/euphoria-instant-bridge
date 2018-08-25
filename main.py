@@ -4,6 +4,7 @@
 import os
 import collections
 import threading
+import json
 import argparse
 import logging
 import sqlite3
@@ -158,11 +159,24 @@ class EuphoriaSendBot(basebot.HeimEndpoint):
             'euphoria_id': packet.data['session'].session_id,
         },))
 
+    def handle_any(self, packet):
+        basebot.HeimEndpoint.handle_any(self, packet)
+        if packet.type == 'send-reply':
+            if isinstance(packet.id, str) and packet.id.startswith('i:'):
+                self.manager.nexus.handle_mapping({
+                    'euphoria': packet.data.id,
+                    'instant': packet.id[2:]
+                })
+
     def handle_login(self):
         basebot.HeimEndpoint.handle_login(self)
         if not self.ready:
             self.ready = True
             if self.on_ready: self.on_ready()
+
+    def submit_post(self, parent, text, sequence):
+        self.send_raw({'id': 'i:' + sequence, 'type': 'send',
+                       'data': {'parent': parent, 'content': text}})
 
 class InstantSendBot(InstantBotWrapper):
     def __init__(self, url, nickname=None, **kwds):
@@ -179,6 +193,21 @@ class InstantSendBot(InstantBotWrapper):
         if not self.ready:
             self.ready = True
             if self.on_ready: self.on_ready()
+
+    def handle_response(self, content, rawmsg):
+        InstantBotWrapper.handle_response(self, content, rawmsg)
+        sequence = content.get('seq')
+        if isinstance(sequence, str) and sequence.startswith('e:'):
+            self.manager.nexus.handle_mapping({
+                'euphoria': sequence[2:],
+                'instant': content['data']['id']
+            })
+
+    def submit_post(self, parent, text, sequence):
+        packet = {'seq': 'e:' + sequence, 'type': 'broadcast',
+                  'data': {'type': 'post', 'parent': parent,
+                           'nick': self.nickname, 'text': text}}
+        self.send_raw(json.dumps(packet, separators=(',', ':')))
 
 def euphoria_id_to_timestamp(msgid):
     # The return value is a UNIX timestamp in milliseconds.
@@ -289,13 +318,9 @@ class MessageStore:
             items = [(e, i) for i, e in mapping.items() if i is not None]
         with self.lock:
             for euphoria, instant in items:
-                try:
-                    self.curs.execute('INSERT '
-                        'INTO id_map(euphoria, instant) '
-                        'VALUES (?, ?)', (euphoria, instant))
-                except sqlite3.IntegrityError:
-                    raise RuntimeError('Cannot install Euphoria:Instant '
-                        'mapping %r:%r' % (euphoria, instant))
+                self.curs.execute('INSERT OR REPLACE '
+                    'INTO id_map(euphoria, instant) '
+                    'VALUES (?, ?)', (euphoria, instant))
                 self._run_watchers(euphoria, instant)
 
     def watch_id(self, platform, ident, callback):
@@ -419,10 +444,16 @@ class Nexus:
 
     def handle_message(self, data):
         with self.lock:
-            self.add_users((data,), _run=False)
+            self.add_users(({k: v for k, v in data.items()
+                             if k in ('platform', 'euphoria_id', 'instant_id',
+                                      'nick', 'delay')},), _run=False)
             entry = self._get_user(data)
             entry['actions'].append(data)
             self.scheduler.add_now(lambda: self._perform_actions((entry,)))
+
+    def handle_mapping(self, data):
+        self.messages.update_ids('euphoria',
+                                 {data['euphoria']: data['instant']})
 
     def _perform_actions(self, entries):
         def make_runner(e):
@@ -434,7 +465,8 @@ class Nexus:
                 continue
             elif e['delay'] is not None and e['delay'] > now:
                 continue
-            bot = self.get_bot(e, make_runner(e))
+            runner = make_runner(e)
+            bot = self.get_bot(e, runner)
             if not bot.ready: continue
             while 1:
                 try:
@@ -444,7 +476,21 @@ class Nexus:
                 if 'nick' in action and action['nick'] != bot.nickname:
                     bot.set_nickname(action['nick'])
                 if 'text' in action:
-                    pass # NYI
+                    with self.messages.lock:
+                        tr_parent = self.messages.translate_id(
+                            e['platform'], action['parent'])
+                        if (action['parent'] is not None and
+                                tr_parent is None):
+                            self.messages.watch_id(action['parent'],
+                                                   runner)
+                            break
+                        try:
+                            self.messages.update_ids(action['platform'],
+                                {action['msgid']: None})
+                        except RuntimeError:
+                            pass
+                    bot.submit_post(tr_parent, action['text'],
+                                    action['msgid'])
                 if action.get('remove'):
                     bot.close()
                     self.remove_bot(e)
