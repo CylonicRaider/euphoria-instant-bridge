@@ -249,6 +249,10 @@ class MessageStore:
                         ret[k] = self.generate_id(platform, k)
             return ret
 
+    def translate_id(self, platform, ident, create=False):
+        res = self.translate_ids(platform, (ident,), create)
+        return res[ident]
+
     def generate_id(self, platform, original):
         # platform is the platform of original.
         if platform == 'instant':
