@@ -14,6 +14,7 @@ INSTANT_ROOM_TEMPLATE = os.environ.get('INSTANT_ROOM_TEMPLATE',
                                        'wss://instant.leet.nu/room/{}/ws')
 
 NICKNAME = 'bridge'
+SURROGATE_DELAY = 5
 
 # We shoehorn instabot Bot-s into the interface expected by basebot in order
 # to leverage the latter's more powerful tools.
@@ -56,7 +57,7 @@ class EuphoriaBridgeBot(basebot.Bot):
 
     def handle_any(self, packet):
         basebot.Bot.handle_any(self, packet)
-        add_users, remove_users = None, None
+        add_users, remove_users, users_new = None, None, False
         # Switch on various packet types.
         if packet.type == 'who-reply':
             add_users = packet.data
@@ -78,6 +79,7 @@ class EuphoriaBridgeBot(basebot.Bot):
             },))
         elif packet.type == 'join-event':
             add_users = (packet.data,)
+            users_new = True
         elif packet.type == 'part-event':
             remove_users = (packet.data,)
         elif packet.type == 'send-event':
@@ -91,7 +93,7 @@ class EuphoriaBridgeBot(basebot.Bot):
         if add_users:
             self.manager.nexus.add_users(
                 [{'platform': 'euphoria', 'euphoria_id': entry.session_id,
-                  'nick': entry.name} for entry in add_users])
+                  'nick': entry.name} for entry in add_users], users_new)
         if remove_users:
             self.manager.nexus.remove_users([{'euphoria_id': entry.session_id}
                                              for entry in remove_users])
@@ -112,7 +114,7 @@ class InstantBridgeBot(InstantBotWrapper):
         self.manager.nexus.add_users(({
             'platform': 'instant',
             'instant_id': content['data']['id']
-        },))
+        },), True)
 
     def handle_left(self, content, rawmsg):
         InstantBotWrapper.handle_left(self, content, rawmsg)
@@ -143,6 +145,13 @@ class EuphoriaSendBot(basebot.HeimEndpoint):
         self.ready = False
         self.on_ready = config.get('on_ready')
 
+    def on_hello_event(self, packet):
+        basebot.HeimEndpoint.on_hello_event(self, packet)
+        self.manager.nexus.ignore_users(({
+            'platform': 'euphoria',
+            'euphoria_id': packet.data['session'].session_id,
+        },))
+
     def handle_login(self):
         basebot.HeimEndpoint.handle_login(self)
         if not self.ready:
@@ -157,6 +166,10 @@ class InstantSendBot(InstantBotWrapper):
 
     def handle_identity(self, content, rawmsg):
         InstantBotWrapper.handle_identity(self, content, rawmsg)
+        self.manager.nexus.ignore_users(({
+            'platform': 'instant',
+            'instant_id': content['data']['id']
+        },))
         if not self.ready:
             self.ready = True
             if self.on_ready: self.on_ready()
@@ -211,14 +224,16 @@ class Nexus:
                 self.instant_users[instant_id] = ret
         if create:
             ret.setdefault('ignore', False)
+            ret.setdefault('delay', None)
             ret.setdefault('nick', None)
             ret.setdefault('actions', collections.deque())
             ret.setdefault('platform', None)
         return ret
 
-    def add_users(self, users, _run=True):
+    def add_users(self, users, new=False, _run=True):
         pending = []
         with self.lock:
+            delay = self.scheduler.time() + SURROGATE_DELAY if new else None
             for u in users:
                 entry = self._get_user(u, True)
                 if u.get('platform'):
@@ -226,9 +241,16 @@ class Nexus:
                 if u.get('nick'):
                     entry['nick'] = u['nick']
                     entry['actions'].append(u)
+                if delay is not None and (entry['delay'] is None or
+                                          entry['delay'] < delay):
+                    entry['delay'] = delay
                 pending.append(entry)
             if _run:
-                self.scheduler.add_now(lambda: self._perform_actions(pending))
+                do_update = lambda: self._perform_actions(pending)
+                if new:
+                    self.scheduler.add_abs(delay, do_update)
+                else:
+                    self.scheduler.add_now(do_update)
 
     def remove_users(self, users):
         with self.lock:
@@ -249,14 +271,14 @@ class Nexus:
 
     def ignore_users(self, users):
         with self.lock:
-            self.add_users(users, False)
+            self.add_users(users, _run=False)
             for u in users:
                 entry = self._get_user(u)
                 entry['ignore'] = True
 
     def handle_message(self, data):
         with self.lock:
-            self.add_users((data,), False)
+            self.add_users((data,), _run=False)
             entry = self._get_user(data)
             entry['actions'].append(data)
             self.scheduler.add_now(lambda: self._perform_actions((entry,)))
@@ -265,8 +287,11 @@ class Nexus:
         def make_runner(e):
             # Has to be a closure because e is a loop variable.
             return lambda: self._perform_actions((e,))
+        now = self.scheduler.time()
         for e in entries:
-            if e['ignore']:
+            if e['ignore'] or not e['actions']:
+                continue
+            elif e['delay'] is not None and e['delay'] > now:
                 continue
             bot = self.get_bot(e, make_runner(e))
             if not bot.ready: continue
@@ -318,20 +343,22 @@ class InstantBotManager(basebot.BotManager):
             config['url'] = INSTANT_ROOM_TEMPLATE.format(roomname)
         if logger is Ellipsis:
             logger = logging.getLogger(logger_name('instant', roomname,
-                                                   nickname))
+                                                   nickname, self.botname))
         return basebot.BotManager.make_bot(self, Ellipsis, Ellipsis,
                                            nickname, logger, **config)
 
 def main():
     def make_bot(entry, on_ready):
+        # Nexus gives us the data of the original connection, so we swap the
+        # platform here.
         if entry['platform'] == 'euphoria':
-            bot = euph_mgr.make_bot(roomname=arguments.euphoria_room,
-                                    on_ready=on_ready)
-            euph_mgr.add_bot(bot)
-        else:
             bot = inst_mgr.make_bot(roomname=arguments.instant_room,
                                     on_ready=on_ready)
             inst_mgr.add_bot(bot)
+        else:
+            bot = euph_mgr.make_bot(roomname=arguments.euphoria_room,
+                                    on_ready=on_ready)
+            euph_mgr.add_bot(bot)
         bot.start()
         return bot
     p = argparse.ArgumentParser()
