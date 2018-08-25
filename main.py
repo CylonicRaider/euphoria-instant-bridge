@@ -88,6 +88,8 @@ class EuphoriaBridgeBot(basebot.Bot):
             self.manager.nexus.handle_message({
                 'platform': 'euphoria',
                 'euphoria_id': packet.data.sender.session_id,
+                'msgid': packet.data.id,
+                'parent': packet.data.parent,
                 'nick': packet.data.sender.name,
                 'text': packet.data.content
             })
@@ -136,6 +138,8 @@ class InstantBridgeBot(InstantBotWrapper):
             self.manager.nexus.handle_message({
                 'platform': 'instant',
                 'instant_id': content['from'],
+                'msgid': content['id'],
+                'parent': data.get('parent'),
                 'nick': data.get('nick'),
                 'text': data.get('text')
             })
