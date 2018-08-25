@@ -192,6 +192,7 @@ class MessageStore:
         self.dbname = dbname
         self.conn = None
         self.curs = None
+        self.watchers = {}
         self.lock = threading.RLock()
 
     def init(self):
@@ -214,19 +215,32 @@ class MessageStore:
             except Exception:
                 pass
 
+    def _run_watchers(self, euphoria, instant):
+        if euphoria is None or instant is None: return
+        for w in self.watchers.pop(('euphoria', euphoria), ()):
+            w(instant)
+        for w in self.watchers.pop(('instant', instant), ()):
+            w(euphoria)
+
     def translate_ids(self, platform, ids, create=False):
+        ret = dict.fromkeys(ids, Ellipsis)
         with self.lock:
-            ret = dict.fromkeys(ids, Ellipsis)
             if platform == 'euphoria':
                 for i in ids:
+                    if i is None:
+                        ret[i] = None
+                        continue
                     self.curs.execute('SELECT euphoria, instant '
-                        'FROM msgid_map WHERE euphoria = ?', (i,))
+                        'FROM id_map WHERE euphoria = ?', (i,))
                     res = self.curs.fetchone()
                     if res is not None: ret[res[0]] = res[1]
             else:
                 for i in ids:
+                    if i is None:
+                        ret[i] = None
+                        continue
                     self.curs.execute('SELECT instant, euphoria '
-                        'FROM msgid_map WHERE instant = ?', (i,))
+                        'FROM id_map WHERE instant = ?', (i,))
                     res = self.curs.fetchone()
                     if res is not None: ret[res[0]] = res[1]
             if create:
@@ -237,17 +251,17 @@ class MessageStore:
 
     def generate_id(self, platform, original):
         # platform is the platform of original.
+        if platform == 'instant':
+            raise RuntimeError('Cannot generate Euphoria ID-s')
+        ts = euphoria_id_to_timestamp(original)
         with self.lock:
-            if platform == 'instant':
-                raise RuntimeError('Cannot generate Euphoria ID-s')
-            ts = euphoria_id_to_timestamp(original)
             # We iterate down from the highest sequence ID to avoid collisions
             # with the Instant backend.
             for seq in range(1023, -1, -1):
                 candidate = timestamp_to_instant_id(ts, seq)
                 try:
                     self.curs.execute('INSERT '
-                        'INTO msgid_map(euphoria, instant) '
+                        'INTO id_map(euphoria, instant) '
                         'VALUES (?, ?)', (original, candidate))
                 except sqlite3.IntegrityError:
                     continue
@@ -256,23 +270,38 @@ class MessageStore:
             else:
                 raise RuntimeError('Cannot generate translation for Euphoria '
                     'ID %r' % original)
+            self._run_watchers(original, candidate)
             return candidate
 
     def update_ids(self, platform, mapping):
         # platform is the platform of the keys of the mapping.
+        if platform == 'euphoria':
+            items = [(e, i) for e, i in mapping.items() if e is not None]
+        else:
+            items = [(e, i) for i, e in mapping.items() if i is not None]
         with self.lock:
-            if platform == 'euphoria':
-                items = mapping.items()
-            else:
-                items = [(e, i) for i, e in mapping.items()]
-            for euphoria, instant in mapping:
+            for euphoria, instant in items:
                 try:
                     self.curs.execute('INSERT '
-                        'INTO msgid_map(euphoria, instant) '
+                        'INTO id_map(euphoria, instant) '
                         'VALUES (?, ?)', (euphoria, instant))
                 except sqlite3.IntegrityError:
                     raise RuntimeError('Cannot install Euphoria:Instant '
                         'mapping %r:%r' % (euphoria, instant))
+                self._run_watchers(euphoria, instant)
+
+    def watch_id(self, platform, ident, callback):
+        key = (platform, ident)
+        with self.lock:
+            if platform == 'euphoria':
+                self.curs.execute('SELECT instant FROM id_map '
+                    'WHERE euphoria = ?', (ident,))
+            else:
+                self.curs.execute('SELECT euphoria FROM id_map '
+                    'WHERE instant = ?', (ident,))
+            res = self.curs.fetchone()
+            if res is not None: return callback(res[0])
+            self.watchers.setdefault(key, []).append(callback)
 
 class Nexus:
     def __init__(self, dbname=None):
