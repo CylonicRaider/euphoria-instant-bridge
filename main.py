@@ -255,7 +255,7 @@ class MessageStore:
         for w in self.watchers.pop(('instant', instant), ()):
             w(euphoria)
 
-    def translate_ids(self, platform, ids, create=False):
+    def translate_ids(self, platform, ids, create=True):
         ret = dict.fromkeys(ids, Ellipsis)
         with self.lock:
             if platform == 'euphoria':
@@ -283,7 +283,7 @@ class MessageStore:
                 self.conn.commit()
             return ret
 
-    def translate_id(self, platform, ident, create=False):
+    def translate_id(self, platform, ident, create=True):
         res = self.translate_ids(platform, (ident,), create)
         return res[ident]
 
