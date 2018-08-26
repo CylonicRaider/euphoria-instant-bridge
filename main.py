@@ -17,10 +17,27 @@ INSTANT_ROOM_TEMPLATE = os.environ.get('INSTANT_ROOM_TEMPLATE',
 
 NICKNAME = 'bridge'
 SURROGATE_DELAY = 2
+MAX_LOG_REQUEST = 50
 
 # UNIX timestampf for 2014-12-00 00:00:00 UTC. Note that the original
 # definition has an off-by-one error.
 EUPHORIA_ID_EPOCH = 1417305600
+
+# Python's standard library is sometimes rather short-sighted, in particular
+# when it comes to inverses for some type conversions...
+def base_encode(number, base=10, pad=0):
+    if isinstance(base, int):
+        alphabet = '0123456789abcdefghijklmnopqrstuvwxyz'[:base]
+    else:
+        alphabet = base
+        base = len(alphabet)
+    ret = []
+    while 1:
+        number, digit = divmod(number, base)
+        ret.append(alphabet[digit])
+    if pad > len(ret):
+        ret.extend(('0',) * (len(ret) - pad))
+    return ''.join(reversed(ret))
 
 # We shoehorn instabot Bot-s into the interface expected by basebot in order
 # to leverage the latter's more powerful tools.
@@ -105,6 +122,19 @@ class EuphoriaBridgeBot(basebot.Bot):
             self.manager.nexus.remove_users([{'euphoria_id': entry.session_id}
                                              for entry in remove_users])
 
+    def query_logs(self, before, after, maxlen, callback):
+        def process(response):
+            callback(response.data['log'])
+        if before is not None:
+            # Euphoria returns results *not* including before, while Instant
+            # returns results *including* before.
+            before = base_encode(int(before, 36) - 1, 36, 13)
+        if after is not None:
+            raise RuntimeError('Cannot request Euphoria logs with a lower '
+                'bound')
+        self.send_packet('log', n=maxlen, before=before,
+                         _callback=process)
+
 class InstantBridgeBot(InstantBotWrapper):
     def on_open(self):
         InstantBotWrapper.on_open(self)
@@ -131,13 +161,14 @@ class InstantBridgeBot(InstantBotWrapper):
 
     def on_client_message(self, data, content, rawmsg):
         InstantBotWrapper.on_client_message(self, data, content, rawmsg)
-        if data.get('type') == 'nick':
+        tp = data.get('type')
+        if tp == 'nick':
             self.manager.nexus.add_users(({
                 'platform': 'instant',
                 'instant_id': content['from'],
                 'nick': data.get('nick')
             },))
-        elif data.get('type') == 'post':
+        elif tp == 'post':
             self.manager.nexus.handle_message({
                 'platform': 'instant',
                 'instant_id': content['from'],
@@ -250,12 +281,15 @@ class MessageStore:
             except Exception:
                 pass
 
-    def _run_watchers(self, euphoria, instant):
-        if euphoria is None or instant is None: return
-        for w in self.watchers.pop(('euphoria', euphoria), ()):
-            w(instant)
-        for w in self.watchers.pop(('instant', instant), ()):
-            w(euphoria)
+    def get_bounds(self):
+        with self.lock:
+            self.curs.execute('SELECT MIN(euphoria), MAX(euphoria), '
+                    'COUNT(euphoria), MIN(instant), MAX(instant), '
+                    'COUNT(instant) '
+                'FROM id_map')
+            emin, emax, ecnt, imin, imax, icnt = self.curs.fetchone()
+            return {'euphoria': (emin, emax, ecnt),
+                    'instant': (imin, imax, icnt)}
 
     def translate_ids(self, platform, ids, create=True):
         ret = dict.fromkeys(ids, Ellipsis)
@@ -358,11 +392,20 @@ class MessageStore:
             if res is not None: return callback(res[0])
             self.watchers.setdefault(key, []).append(callback)
 
+    def _run_watchers(self, euphoria, instant):
+        if euphoria is None or instant is None: return
+        for w in self.watchers.pop(('euphoria', euphoria), ()):
+            w(instant)
+        for w in self.watchers.pop(('instant', instant), ()):
+            w(euphoria)
+
 class Nexus:
     def __init__(self, dbname=None):
         self.euphoria_users = {}
         self.instant_users = {}
         self.bots = {}
+        self.euphoria_bot = None
+        self.instant_bot = None
         self.messages = MessageStore(dbname)
         self.scheduler = instabot.EventScheduler()
         self.lock = threading.RLock()
@@ -482,6 +525,47 @@ class Nexus:
             self.messages.translate_ids(platform, ids)
         except RuntimeError as exc:
             self.logger.warning('Could not gather up message ID-s: %r', exc)
+
+    def message_bounds(self, platform):
+        return self.messages.get_bounds()[platform]
+
+    def request_messages(self, platform, before, after, maxlen, callback):
+        def before_translated(result):
+            # The "before" ID has been translated; schedule the actual
+            # execution of the log query.
+            tr_ids[before] = result
+            self.scheduler.add_now(run_query)
+        def run_query():
+            # Actually execute the log query.
+            self.euphoria_bot.query_logs(tr_ids[before], None,
+                                         maxlen, process_result)
+        def process_logs(logs):
+            # Translate the ID-s of the log messages.
+            ids = set(msg.id for msg in logs)
+            ids.update(msg.parent for msg in logs)
+            self.messages.watch_ids('euphoria', ids,
+                lambda mapping: process_result(logs, mapping))
+        def process_result(logs, mapping):
+            # Translate the logs and pass them to the callback.
+            result = []
+            for msg in logs:
+                result.append({'id': mapping[msg.id],
+                               'parent': mapping[msg.parent],
+                               'nick': msg.sender.name,
+                               'text': msg.content,
+                               'timestamp': msg.time})
+            callback(result)
+        if platform != 'instant':
+            raise RuntimeError('Cannot query messages from Instant for '
+                'Euphoria')
+        if maxlen is None or maxlen > MAX_LOG_REQUEST:
+            maxlen = MAX_LOG_REQUEST
+        if before is None and after is not None:
+            # TODO: Euphoria does not implement this one, so we will have to
+            # emulate it... somehow.
+            return callback(())
+        tr_ids = {before: Ellipsis}
+        self.messages.watch_id(platform, before, before_translated)
 
     def _perform_actions(self, entries):
         def make_runner(e):
@@ -606,11 +690,12 @@ def main():
         botname='surrogate', nexus=nexus)
     inst_mgr = InstantBotManager(botcls=InstantSendBot,
         botname='surrogate', nexus=nexus)
-    euph_mgr.add_bot(euph_mgr.make_bot(botcls=EuphoriaBridgeBot,
-        botname='bridge', roomname=arguments.euphoria_room,
-        nickname=NICKNAME))
-    inst_mgr.add_bot(inst_mgr.make_bot(botcls=InstantBridgeBot,
-        botname='bridge', roomname=arguments.instant_room, nickname=NICKNAME))
+    nexus.euphoria_bot = euph_mgr.make_bot(botcls=EuphoriaBridgeBot,
+        botname='bridge', roomname=arguments.euphoria_room, nickname=NICKNAME)
+    nexus.instant_bot = inst_mgr.make_bot(botcls=InstantBridgeBot,
+        botname='bridge', roomname=arguments.instant_room, nickname=NICKNAME)
+    euph_mgr.add_bot(nexus.euphoria_bot)
+    inst_mgr.add_bot(nexus.instant_bot)
     euph_mgr.add_child(inst_mgr)
     try:
         nexus.start()
