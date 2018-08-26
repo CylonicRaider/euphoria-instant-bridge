@@ -35,6 +35,7 @@ def base_encode(number, base=10, pad=0):
     while 1:
         number, digit = divmod(number, base)
         ret.append(alphabet[digit])
+        if number == 0: break
     if pad > len(ret):
         ret.extend(('0',) * (len(ret) - pad))
     return ''.join(reversed(ret))
@@ -160,6 +161,9 @@ class InstantBridgeBot(InstantBotWrapper):
         },))
 
     def on_client_message(self, data, content, rawmsg):
+        def send_log(messages):
+            self.send_unicast(content['from'], {'type': 'log',
+                'key': data.get('key'), 'data': messages})
         InstantBotWrapper.on_client_message(self, data, content, rawmsg)
         tp = data.get('type')
         if tp == 'nick':
@@ -177,6 +181,14 @@ class InstantBridgeBot(InstantBotWrapper):
                 'nick': data.get('nick'),
                 'text': data.get('text')
             })
+        elif tp == 'log-query':
+            bounds = self.manager.nexus.message_bounds('instant')
+            if bounds[2]:
+                self.send_unicast(content['from'], {'type': 'log-info',
+                    'from': bounds[0], 'to': bounds[1], 'length': bounds[2]})
+        elif tp == 'log-request':
+            self.manager.nexus.request_messages('instant', data.get('to'),
+                data.get('from'), data.get('length'), send_log)
 
 class EuphoriaSendBot(basebot.HeimEndpoint):
     def __init__(self, roomname=None, **config):
@@ -380,6 +392,7 @@ class MessageStore:
             check(None, None)
 
     def watch_id(self, platform, ident, callback):
+        if ident is None: return callback(None)
         key = (platform, ident)
         with self.lock:
             if platform == 'euphoria':
@@ -537,8 +550,8 @@ class Nexus:
             self.scheduler.add_now(run_query)
         def run_query():
             # Actually execute the log query.
-            self.euphoria_bot.query_logs(tr_ids[before], None,
-                                         maxlen, process_result)
+            self.euphoria_bot.query_logs(tr_ids[before], None, maxlen,
+                                         process_logs)
         def process_logs(logs):
             # Translate the ID-s of the log messages.
             ids = set(msg.id for msg in logs)
@@ -547,6 +560,7 @@ class Nexus:
                 lambda mapping: process_result(logs, mapping))
         def process_result(logs, mapping):
             # Translate the logs and pass them to the callback.
+            # TODO: Cut away messages to satisfy "after".
             result = []
             for msg in logs:
                 result.append({'id': mapping[msg.id],
