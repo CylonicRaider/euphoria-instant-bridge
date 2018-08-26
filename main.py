@@ -328,6 +328,23 @@ class MessageStore:
                 self._run_watchers(euphoria, instant)
             self.conn.commit()
 
+    def watch_ids(self, platform, idents, callback, create=True):
+        def check(orig, translated):
+            if orig is not None:
+                ret[orig] = translated
+                pending_keys.discard(orig)
+            if not pending_keys:
+                callback(ret)
+        with self.lock:
+            ret = self.translate_ids(platform, idents, create)
+            pending_keys = set()
+            for k, v in ret.items():
+                if k is not None and v is None:
+                    pending_keys.add(k)
+                    self.watchers.setdefault((platform, k), []).append(
+                        lambda translated, orig=k: check(orig, translated))
+            check(None, None)
+
     def watch_id(self, platform, ident, callback):
         key = (platform, ident)
         with self.lock:
