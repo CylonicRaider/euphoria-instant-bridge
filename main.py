@@ -44,7 +44,7 @@ def base_encode(number, base=10, pad=0):
 # to leverage the latter's more powerful tools.
 class InstantBotWrapper(instabot.Bot):
     def __init__(self, url, nickname=Ellipsis, **kwds):
-        instabot.Bot.__init__(self, url, nickname, **kwds)
+        instabot.Bot.__init__(self, url, nickname, keepalive=True, **kwds)
         self.manager = kwds.get('manager')
         self.logger = kwds.get('logger', logging.getLogger())
         self.lock = threading.RLock()
@@ -58,11 +58,14 @@ class InstantBotWrapper(instabot.Bot):
         instabot.Bot.on_open(self)
         self.logger.info('Connected')
 
-    def on_close(self):
-        instabot.Bot.on_close(self)
+    def on_connection_error(self, exc):
+        self.logger.warning('Exception while connecting: %r', exc)
+
+    def on_close(self, final):
+        instabot.Bot.on_close(self, final)
         self.logger.info('Closing')
-        # FIXME: Instabot does not expose the "ok" and "final" parameters.
-        if self.manager: self.manager.handle_close(self, True, True)
+        # Instabot does not expose the "ok" parameter.
+        if self.manager: self.manager.handle_close(self, True, final)
 
     def send_nick(self, peer=None):
         if self.nickname != self._sent_nick:
