@@ -704,9 +704,9 @@ def main():
     nexus.make_bot = make_bot
     bot_counter = [0]
     euph_mgr = EuphoriaBotManager(botcls=EuphoriaSendBot,
-        botname='surrogate', nexus=nexus)
+        botname='EuphoriaBridge', nexus=nexus)
     inst_mgr = InstantBotManager(botcls=InstantSendBot,
-        botname='surrogate', nexus=nexus)
+        botname='InstantBridge', nexus=nexus)
     nexus.euphoria_bot = euph_mgr.make_bot(botcls=EuphoriaBridgeBot,
         botname='bridge', roomname=arguments.euphoria_room, nickname=NICKNAME)
     nexus.instant_bot = inst_mgr.make_bot(botcls=InstantBridgeBot,
