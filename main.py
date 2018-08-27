@@ -570,7 +570,7 @@ class Nexus:
                                'parent': mapping[msg.parent],
                                'nick': msg.sender.name,
                                'text': msg.content,
-                               'timestamp': msg.time})
+                               'timestamp': msg.time * 1000})
             callback(result)
         if platform != 'instant':
             raise RuntimeError('Cannot query messages from Instant for '
