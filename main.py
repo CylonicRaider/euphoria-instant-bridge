@@ -285,6 +285,13 @@ class MessageStore:
                 'instant TEXT UNIQUE'
             ')')
 
+    def gc(self):
+        with self.lock:
+            self.curs.execute('DELETE FROM id_map WHERE euphoria IS NULL OR '
+                'instant IS NULL')
+            self.conn.commit()
+            return self.curs.rowcount
+
     def close(self):
         with self.lock:
             try:
@@ -631,6 +638,11 @@ class Nexus:
         # TODO: Make Nexus a proper BotManager child.
         self.logger.info('Starting...')
         self.messages.init()
+        res = self.messages.gc()
+        if res == 1:
+            self.logger.warning('Discarded %s incomplete mapping', res)
+        elif res > 1:
+            self.logger.warning('Discarded %s incomplete mappings', res)
         basebot.spawn_thread(self.scheduler.main)
 
 def logger_name(platform, room, nick, botname):
