@@ -17,7 +17,7 @@ INSTANT_ROOM_TEMPLATE = os.environ.get('INSTANT_ROOM_TEMPLATE',
 
 NICKNAME = 'bridge'
 SURROGATE_DELAY = 2
-MAX_LOG_REQUEST = 50
+MAX_LOG_REQUEST = 100
 
 # UNIX timestampf for 2014-12-00 00:00:00 UTC. Note that the original
 # definition has an off-by-one error.
@@ -584,6 +584,13 @@ class Nexus:
         def process_result(logs, mapping):
             # Translate the logs and pass them to the callback.
             result = []
+            # HACK: Euphoria does not support querying "downwards" from a
+            #       message; we partially emulate that by ignoring the "after"
+            #       parameter up to here and cutting out the messages we
+            #       accidentally pick up as a result.
+            #       This suffices for the Instant frontend's needs in the
+            #       hopefully common case that less than MAX_LOG_REQUEST
+            #       messages were missed after a reconnect.
             for msg in logs:
                 if after is not None and mapping[msg.id] < after: continue
                 result.append({'id': mapping[msg.id],
@@ -597,10 +604,8 @@ class Nexus:
                 'Euphoria')
         if maxlen is None or maxlen > MAX_LOG_REQUEST:
             maxlen = MAX_LOG_REQUEST
-        if before is None and after is not None:
-            # TODO: Euphoria does not implement this one, so we will have to
-            # emulate it... somehow.
-            return callback(())
+        # See process_result() for the apparently lacking treatment of the
+        # "after" parameter.
         tr_ids = {before: Ellipsis}
         self.messages.watch_id(platform, before, before_translated)
 
