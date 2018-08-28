@@ -41,10 +41,13 @@ def base_encode(number, base=10, pad=0):
     return ''.join(reversed(ret))
 
 class EuphoriaBot(basebot.HeimEndpoint):
-    def submit_post(self, parent, text, sequence):
+    def submit_post(self, parent, text, sequence=None, callback=None):
         packet = {'type': 'send',
                   'data': {'parent': parent, 'content': text}}
-        if sequence: packet['id'] = 'i:' + sequence
+        if sequence is not None:
+            packet['id'] = sequence
+            if callback is not None:
+                self.callbacks[sequence] = callback
         self.send_raw(packet)
 
 # We shoehorn instabot Bot-s into the interface expected by basebot in order
@@ -55,6 +58,7 @@ class InstantBot(instabot.Bot):
         self.manager = kwds.get('manager')
         self.logger = kwds.get('logger', logging.getLogger())
         self.lock = threading.RLock()
+        self.callbacks = {}
         self._sent_nick = Ellipsis
 
     def connect(self):
@@ -67,6 +71,11 @@ class InstantBot(instabot.Bot):
 
     def on_connection_error(self, exc):
         self.logger.warning('Exception while connecting: %r', exc)
+
+    def handle_response(self, content, rawmsg):
+        instabot.Bot.handle_response(self, content, rawmsg)
+        cb = self.callbacks.pop(content.get('seq'), None)
+        if cb: cb(content)
 
     def on_close(self, final):
         instabot.Bot.on_close(self, final)
@@ -85,11 +94,14 @@ class InstantBot(instabot.Bot):
         if nick is not Ellipsis: self.nickname = nick
         self.send_nick()
 
-    def submit_post(self, parent, text, sequence=None):
+    def submit_post(self, parent, text, sequence=None, callback=None):
         packet = {'type': 'broadcast',
                   'data': {'type': 'post', 'parent': parent,
                            'nick': self.nickname, 'text': text}}
-        if sequence is not None: packet['seq'] = 'e:' + sequence
+        if sequence is not None:
+            packet['seq'] = sequence
+            if callback is not None:
+                self.callbacks[sequence] = callback
         self.send_raw(json.dumps(packet, separators=(',', ':')))
 
 class EuphoriaBridgeBot(EuphoriaBot):
@@ -226,10 +238,11 @@ class EuphoriaSendBot(EuphoriaBot):
     def handle_any(self, packet):
         EuphoriaBot.handle_any(self, packet)
         if packet.type == 'send-reply':
-            if isinstance(packet.id, str) and packet.id.startswith('i:'):
+            if (isinstance(packet.id, str) and
+                    packet.id.startswith('instant:')):
                 self.manager.nexus.add_mapping({
                     'euphoria': packet.data.id,
-                    'instant': packet.id[2:]
+                    'instant': packet.id.partition(':')[2]
                 })
 
     def handle_login(self):
@@ -257,9 +270,9 @@ class InstantSendBot(InstantBot):
     def handle_response(self, content, rawmsg):
         InstantBot.handle_response(self, content, rawmsg)
         sequence = content.get('seq')
-        if isinstance(sequence, str) and sequence.startswith('e:'):
+        if isinstance(sequence, str) and sequence.startswith('euphoria:'):
             self.manager.nexus.add_mapping({
-                'euphoria': sequence[2:],
+                'euphoria': sequence.partition(':')[2],
                 'instant': content['data']['id']
             })
 
@@ -639,18 +652,18 @@ class Nexus:
                                 e['platform'], action['parent'])
                         except RuntimeError as exc:
                             self.logger.warning('Could not translate message '
-                                'ID %s/%s: %r', e['platform'],
+                                'ID %s:%s: %r', e['platform'],
                                 action['parent'], exc)
                             continue
+                        self.messages.update_ids(e['platform'],
+                            {action['msgid']: None})
                         if (action['parent'] is not None and
                                 tr_parent is None):
-                            self.messages.watch_id(action['parent'],
-                                                   runner)
+                            self.messages.watch_id(e['platform'],
+                                action['parent'], lambda result: runner)
                             break
-                        self.messages.update_ids(action['platform'],
-                            {action['msgid']: None})
                     bot.submit_post(tr_parent, action['text'],
-                                    action['msgid'])
+                        e['platform'] + ':' + action['msgid'])
                 if action.get('remove'):
                     bot.close()
                     self.remove_bot(e)
