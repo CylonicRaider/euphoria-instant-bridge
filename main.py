@@ -583,9 +583,9 @@ class Nexus:
                 lambda mapping: process_result(logs, mapping))
         def process_result(logs, mapping):
             # Translate the logs and pass them to the callback.
-            # TODO: Cut away messages to satisfy "after".
             result = []
             for msg in logs:
+                if after is not None and mapping[msg.id] < after: continue
                 result.append({'id': mapping[msg.id],
                                'parent': mapping[msg.parent],
                                'nick': msg.sender.name,
