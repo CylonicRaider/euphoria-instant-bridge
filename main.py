@@ -95,8 +95,9 @@ class EuphoriaBridgeBot(basebot.Bot):
                 for msg in packet.data['log']])
             add_users = packet.data['listing']
         elif packet.type == 'network-event':
-            # TODO: support this
-            pass
+            if packet.data['type'] == 'partition':
+                self.manager.nexus.remove_group(('euphoria',
+                    packet.data['server_id'], packet.data['server_era']))
         elif packet.type == 'nick-event':
             self.manager.nexus.add_users(({
                 'platform': 'euphoria',
@@ -119,9 +120,10 @@ class EuphoriaBridgeBot(basebot.Bot):
             })
         # Apply user additions/deletions.
         if add_users:
-            self.manager.nexus.add_users(
-                [{'platform': 'euphoria', 'euphoria_id': entry.session_id,
-                  'nick': entry.name} for entry in add_users], users_new)
+            self.manager.nexus.add_users([{'platform': 'euphoria',
+                    'euphoria_id': entry.session_id, 'nick': entry.name,
+                    'group': ('euphoria', entry.server_id, entry.server_era)}
+                for entry in add_users], users_new)
         if remove_users:
             self.manager.nexus.remove_users([{'euphoria_id': entry.session_id}
                                              for entry in remove_users])
@@ -492,6 +494,8 @@ class Nexus:
                 entry = self._get_user(u, True)
                 if u.get('platform'):
                     entry['platform'] = u['platform']
+                if u.get('group'):
+                    entry['group'] = u['group']
                 if u.get('nick'):
                     entry['nick'] = u['nick']
                     entry['actions'].append(u)
@@ -522,6 +526,15 @@ class Nexus:
                         ui['actions'].append({'remove': True})
                         pending.append(ui)
             self.scheduler.add_now(lambda: self._perform_actions(pending))
+
+    def remove_group(self, group):
+        with self.lock:
+            toremove = []
+            toremove.extend(u for u in self.euphoria_users
+                            if u.get('group') == group)
+            toremove.extend(u for u in self.instant_users
+                            if u.get('group') == group)
+            self.remove_users(toremove)
 
     def ignore_users(self, users):
         with self.lock:
