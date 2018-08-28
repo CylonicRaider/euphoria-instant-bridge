@@ -40,9 +40,16 @@ def base_encode(number, base=10, pad=0):
         ret.extend(('0',) * (len(ret) - pad))
     return ''.join(reversed(ret))
 
+class EuphoriaBot(basebot.HeimEndpoint):
+    def submit_post(self, parent, text, sequence):
+        packet = {'type': 'send',
+                  'data': {'parent': parent, 'content': text}}
+        if sequence: packet['id'] = 'i:' + sequence
+        self.send_raw(packet)
+
 # We shoehorn instabot Bot-s into the interface expected by basebot in order
 # to leverage the latter's more powerful tools.
-class InstantBotWrapper(instabot.Bot):
+class InstantBot(instabot.Bot):
     def __init__(self, url, nickname=Ellipsis, **kwds):
         instabot.Bot.__init__(self, url, nickname, keepalive=True, **kwds)
         self.manager = kwds.get('manager')
@@ -78,9 +85,16 @@ class InstantBotWrapper(instabot.Bot):
         if nick is not Ellipsis: self.nickname = nick
         self.send_nick()
 
-class EuphoriaBridgeBot(basebot.Bot):
+    def submit_post(self, parent, text, sequence=None):
+        packet = {'type': 'broadcast',
+                  'data': {'type': 'post', 'parent': parent,
+                           'nick': self.nickname, 'text': text}}
+        if sequence is not None: packet['seq'] = 'e:' + sequence
+        self.send_raw(json.dumps(packet, separators=(',', ':')))
+
+class EuphoriaBridgeBot(EuphoriaBot):
     def handle_any(self, packet):
-        basebot.Bot.handle_any(self, packet)
+        EuphoriaBot.handle_any(self, packet)
         add_users, remove_users, users_new = None, None, False
         # Switch on various packet types.
         if packet.type == 'who-reply':
@@ -141,26 +155,26 @@ class EuphoriaBridgeBot(basebot.Bot):
         self.send_packet('log', n=maxlen, before=before,
                          _callback=process)
 
-class InstantBridgeBot(InstantBotWrapper):
+class InstantBridgeBot(InstantBot):
     def on_open(self):
-        InstantBotWrapper.on_open(self)
+        InstantBot.on_open(self)
         self.send_broadcast({'type': 'who'})
 
     def handle_identity(self, content, rawmsg):
-        InstantBotWrapper.handle_identity(self, content, rawmsg)
+        InstantBot.handle_identity(self, content, rawmsg)
         self.manager.nexus.ignore_users(({
             'instant_id': self.identity['id']
         },))
 
     def handle_joined(self, content, rawmsg):
-        InstantBotWrapper.handle_joined(self, content, rawmsg)
+        InstantBot.handle_joined(self, content, rawmsg)
         self.manager.nexus.add_users(({
             'platform': 'instant',
             'instant_id': content['data']['id']
         },), True)
 
     def handle_left(self, content, rawmsg):
-        InstantBotWrapper.handle_left(self, content, rawmsg)
+        InstantBot.handle_left(self, content, rawmsg)
         self.manager.nexus.remove_users(({
             'instant_id': content['data']['id']
         },))
@@ -169,7 +183,7 @@ class InstantBridgeBot(InstantBotWrapper):
         def send_log(messages):
             self.send_unicast(content['from'], {'type': 'log',
                 'key': data.get('key'), 'data': messages})
-        InstantBotWrapper.on_client_message(self, data, content, rawmsg)
+        InstantBot.on_client_message(self, data, content, rawmsg)
         tp = data.get('type')
         if tp == 'nick':
             self.manager.nexus.add_users(({
@@ -195,22 +209,22 @@ class InstantBridgeBot(InstantBotWrapper):
             self.manager.nexus.request_messages('instant', data.get('to'),
                 data.get('from'), data.get('length'), send_log)
 
-class EuphoriaSendBot(basebot.HeimEndpoint):
+class EuphoriaSendBot(EuphoriaBot):
     def __init__(self, roomname=None, **config):
         config.setdefault('roomname', roomname)
-        basebot.HeimEndpoint.__init__(self, **config)
+        EuphoriaBot.__init__(self, **config)
         self.ready = False
         self.on_ready = config.get('on_ready')
 
     def on_hello_event(self, packet):
-        basebot.HeimEndpoint.on_hello_event(self, packet)
+        EuphoriaBot.on_hello_event(self, packet)
         self.manager.nexus.ignore_users(({
             'platform': 'euphoria',
             'euphoria_id': packet.data['session'].session_id,
         },))
 
     def handle_any(self, packet):
-        basebot.HeimEndpoint.handle_any(self, packet)
+        EuphoriaBot.handle_any(self, packet)
         if packet.type == 'send-reply':
             if isinstance(packet.id, str) and packet.id.startswith('i:'):
                 self.manager.nexus.add_mapping({
@@ -219,23 +233,19 @@ class EuphoriaSendBot(basebot.HeimEndpoint):
                 })
 
     def handle_login(self):
-        basebot.HeimEndpoint.handle_login(self)
+        EuphoriaBot.handle_login(self)
         if not self.ready:
             self.ready = True
             if self.on_ready: self.on_ready()
 
-    def submit_post(self, parent, text, sequence):
-        self.send_raw({'id': 'i:' + sequence, 'type': 'send',
-                       'data': {'parent': parent, 'content': text}})
-
-class InstantSendBot(InstantBotWrapper):
+class InstantSendBot(InstantBot):
     def __init__(self, url, nickname=None, **kwds):
-        InstantBotWrapper.__init__(self, url, nickname, **kwds)
+        InstantBot.__init__(self, url, nickname, **kwds)
         self.ready = False
         self.on_ready = kwds.get('on_ready')
 
     def handle_identity(self, content, rawmsg):
-        InstantBotWrapper.handle_identity(self, content, rawmsg)
+        InstantBot.handle_identity(self, content, rawmsg)
         self.manager.nexus.ignore_users(({
             'platform': 'instant',
             'instant_id': content['data']['id']
@@ -245,19 +255,13 @@ class InstantSendBot(InstantBotWrapper):
             if self.on_ready: self.on_ready()
 
     def handle_response(self, content, rawmsg):
-        InstantBotWrapper.handle_response(self, content, rawmsg)
+        InstantBot.handle_response(self, content, rawmsg)
         sequence = content.get('seq')
         if isinstance(sequence, str) and sequence.startswith('e:'):
             self.manager.nexus.add_mapping({
                 'euphoria': sequence[2:],
                 'instant': content['data']['id']
             })
-
-    def submit_post(self, parent, text, sequence):
-        packet = {'seq': 'e:' + sequence, 'type': 'broadcast',
-                  'data': {'type': 'post', 'parent': parent,
-                           'nick': self.nickname, 'text': text}}
-        self.send_raw(json.dumps(packet, separators=(',', ':')))
 
 def euphoria_id_to_timestamp(msgid):
     # The return value is a UNIX timestamp in milliseconds.
