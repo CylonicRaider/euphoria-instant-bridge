@@ -433,6 +433,7 @@ class Nexus:
         self.instant_bot = None
         self.messages = MessageStore(dbname)
         self.scheduler = instabot.EventScheduler()
+        self.parent = None
         self.lock = threading.RLock()
         self.bot_lock = threading.RLock()
         self.logger = logging.getLogger('nexus')
@@ -653,7 +654,6 @@ class Nexus:
                     self.remove_bot(e)
 
     def start(self):
-        # TODO: Make Nexus a proper BotManager child.
         self.logger.info('Starting...')
         self.messages.init()
         res = self.messages.gc()
@@ -662,6 +662,12 @@ class Nexus:
         elif res > 1:
             self.logger.warning('Discarded %s incomplete mappings', res)
         basebot.spawn_thread(self.scheduler.main)
+
+    def shutdown(self):
+        self.scheduler.shutdown()
+
+    def join(self):
+        self.scheduler.join()
 
 def logger_name(platform, room, nick, botname):
     if room in (None, Ellipsis): room = '???'
@@ -744,8 +750,8 @@ def main():
     euph_mgr.add_bot(nexus.euphoria_bot)
     inst_mgr.add_bot(nexus.instant_bot)
     euph_mgr.add_child(inst_mgr)
+    euph_mgr.add_child(nexus)
     try:
-        nexus.start()
         euph_mgr.main()
     except (KeyboardInterrupt, SystemExit) as exc:
         euph_mgr.shutdown()
