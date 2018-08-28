@@ -574,11 +574,12 @@ class Nexus:
         def before_translated(result):
             # The "before" ID has been translated; schedule the actual
             # execution of the log query.
-            tr_ids[before] = result
-            self.scheduler.add_now(run_query)
-        def run_query():
+            self.scheduler.add_now(lambda: run_query(result))
+        def run_query(translated):
             # Actually execute the log query.
-            self.euphoria_bot.query_logs(tr_ids[before], None, maxlen,
+            # See process_result() for the apparently lacking  "after"
+            # parameter.
+            self.euphoria_bot.query_logs(translated, None, maxlen,
                                          process_logs)
         def process_logs(logs):
             # Translate the ID-s of the log messages.
@@ -609,9 +610,6 @@ class Nexus:
                 'Euphoria')
         if maxlen is None or maxlen > MAX_LOG_REQUEST:
             maxlen = MAX_LOG_REQUEST
-        # See process_result() for the apparently lacking treatment of the
-        # "after" parameter.
-        tr_ids = {before: Ellipsis}
         self.messages.watch_id(platform, before, before_translated)
 
     def _perform_actions(self, entries):
