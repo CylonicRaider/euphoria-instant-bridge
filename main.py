@@ -59,8 +59,10 @@ class EuphoriaBot(basebot.HeimEndpoint):
 # We shoehorn instabot Bot-s into the interface expected by basebot in order
 # to leverage the latter's more powerful tools.
 class InstantBot(instabot.Bot):
-    def __init__(self, url, nickname=Ellipsis, **kwds):
+    def __init__(self, roomname, nickname=Ellipsis, **kwds):
+        url = INSTANT_ROOM_TEMPLATE.format(roomname)
         instabot.Bot.__init__(self, url, nickname, keepalive=True, **kwds)
+        self.roomname = roomname
         self.manager = kwds.get('manager')
         self.logger = kwds.get('logger', logging.getLogger())
         self.lock = threading.RLock()
@@ -258,8 +260,8 @@ class EuphoriaSendBot(EuphoriaBot):
             if self.on_ready: self.on_ready()
 
 class InstantSendBot(InstantBot):
-    def __init__(self, url, nickname=None, **kwds):
-        InstantBot.__init__(self, url, nickname, **kwds)
+    def __init__(self, roomname, nickname=None, **kwds):
+        InstantBot.__init__(self, roomname, nickname, **kwds)
         self.ready = False
         self.on_ready = kwds.get('on_ready')
 
@@ -764,13 +766,11 @@ class InstantBotManager(basebot.BotManager):
                  nickname=Ellipsis, logger=Ellipsis, **config):
         if passcode is not Ellipsis:
             raise TypeError('Instant bots do not have passcodes')
-        if roomname is not Ellipsis:
-            config['url'] = INSTANT_ROOM_TEMPLATE.format(roomname)
         if logger is Ellipsis:
             botname = config.get('botname', self.botname)
             logger = logging.getLogger(logger_name('instant', roomname,
                                                    nickname, botname))
-        return basebot.BotManager.make_bot(self, Ellipsis, Ellipsis,
+        return basebot.BotManager.make_bot(self, roomname, Ellipsis,
                                            nickname, logger, **config)
 
 def main():
