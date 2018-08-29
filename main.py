@@ -19,7 +19,8 @@ NICKNAME = 'bridge'
 SURROGATE_DELAY = 2
 MAX_LOG_REQUEST = 100
 
-HELP_TEXT = 'I relay messages between Euphoria and Instant.'
+HELP_TEMPLATE = ('I relay messages between a Euphoria room (&%(euphoria)s) '
+    'and an Instant room (&%(instant)s).')
 
 # UNIX timestampf for 2014-12-00 00:00:00 UTC. Note that the original
 # definition has an off-by-one error.
@@ -594,7 +595,8 @@ class Nexus:
         normnick = basebot.normalize_nick
         if tokens[0] == '!help' and (len(tokens) == 1 or
                 ping_matches(tokens[1], NICKNAME)):
-            reply(HELP_TEXT)
+            reply(HELP_TEMPLATE % {'euphoria': self.euphoria_bot.roomname,
+                                   'instant': self.instant_bot.roomname})
 
     def add_mapping(self, data):
         self.messages.update_ids('euphoria',
