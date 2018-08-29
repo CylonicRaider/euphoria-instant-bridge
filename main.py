@@ -452,11 +452,18 @@ class Nexus:
         self.scheduler = instabot.EventScheduler()
         self.parent = None
         self.lock = threading.RLock()
+        self.seq_lock = threading.RLock()
         self.bot_lock = threading.RLock()
         self.logger = logging.getLogger('nexus')
+        self._last_sequence = 0
 
     def close(self):
         self.messages.close()
+
+    def _sequence(self):
+        with self.seq_lock:
+            self._last_sequence += 1
+            return 'nexus:%s' % self._last_sequence
 
     def _bot_ident(self, entry):
         if entry['platform'] == 'euphoria':
@@ -624,6 +631,34 @@ class Nexus:
         if maxlen is None or maxlen > MAX_LOG_REQUEST:
             maxlen = MAX_LOG_REQUEST
         self.messages.watch_id(platform, before, before_translated)
+
+    def send_bridge_message(self, platform, parent, text):
+        # The message is sent on both platforms; platform defines which
+        # platform parent is on.
+        def parent_resolved(other):
+            if platform == 'euphoria':
+                euphoria_parent, instant_parent = parent, other
+            else:
+                euphoria_parent, instant_parent = other, parent
+            self.scheduler.add_now(
+                lambda: do_send(euphoria_parent, instant_parent))
+        def do_send(euphoria_parent, instant_parent):
+            self.euphoria_bot.submit_post(euphoria_parent, text,
+                self._sequence(),
+                lambda p: self.scheduler.add_now(lambda: euphoria_cb(p)))
+            self.instant_bot.submit_post(instant_parent, text,
+                self._sequence(),
+                lambda p: self.scheduler.add_now(lambda: instant_cb(p)))
+        def euphoria_cb(packet):
+            ids['euphoria'] = packet.id
+            if ids['instant'] is not Ellipsis:
+                self.add_mapping(ids)
+        def instant_cb(packet):
+            ids['instant'] = packet['data']['id']
+            if ids['euphoria'] is not Ellipsis:
+                self.add_mapping(ids)
+        ids = {'euphoria': Ellipsis, 'instant': Ellipsis}
+        self.messages.watch_id(platform, parent, parent_resolved)
 
     def _perform_actions(self, entries):
         def make_runner(e):
