@@ -19,6 +19,8 @@ NICKNAME = 'bridge'
 SURROGATE_DELAY = 2
 MAX_LOG_REQUEST = 100
 
+HELP_TEXT = 'I relay messages between Euphoria and Instant.'
+
 # UNIX timestampf for 2014-12-00 00:00:00 UTC. Note that the original
 # definition has an off-by-one error.
 EUPHORIA_ID_EPOCH = 1417305600
@@ -39,6 +41,10 @@ def base_encode(number, base=10, pad=0):
     if pad > len(ret):
         ret.extend(('0',) * (len(ret) - pad))
     return ''.join(reversed(ret))
+
+def ping_matches(ping, nick):
+    if not ping.startswith('@'): return False
+    return basebot.normalize_nick(ping[1:]) == basebot.normalize_nick(nick)
 
 class EuphoriaBot(basebot.HeimEndpoint):
     def submit_post(self, parent, text, sequence=None, callback=None):
@@ -431,7 +437,7 @@ class MessageStore:
                 self.curs.execute('SELECT euphoria FROM id_map '
                     'WHERE instant = ?', (ident,))
             res = self.curs.fetchone()
-            if res is not None: return callback(res[0])
+            if res is not None and res[0] is not None: return callback(res[0])
             self.watchers.setdefault(key, []).append(callback)
 
     def _run_watchers(self, euphoria, instant):
@@ -576,6 +582,17 @@ class Nexus:
             entry = self._get_user(data)
             entry['actions'].append(data)
             self.scheduler.add_now(lambda: self._perform_actions((entry,)))
+            if not entry['ignore'] and data['text'].startswith('!'):
+                tokens = basebot.parse_command(data['text'])
+                reply = lambda text: self.send_bridge_message(
+                    entry['platform'], data['msgid'], text)
+                self.handle_command(tokens, reply)
+
+    def handle_command(self, tokens, reply):
+        normnick = basebot.normalize_nick
+        if tokens[0] == '!help' and (len(tokens) == 1 or
+                ping_matches(tokens[1], NICKNAME)):
+            reply(HELP_TEXT)
 
     def add_mapping(self, data):
         self.messages.update_ids('euphoria',
@@ -650,7 +667,7 @@ class Nexus:
                 self._sequence(),
                 lambda p: self.scheduler.add_now(lambda: instant_cb(p)))
         def euphoria_cb(packet):
-            ids['euphoria'] = packet.id
+            ids['euphoria'] = packet.data.id
             if ids['instant'] is not Ellipsis:
                 self.add_mapping(ids)
         def instant_cb(packet):
