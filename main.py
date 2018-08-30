@@ -28,6 +28,14 @@ HELP_TEMPLATE = ('I relay messages between a Euphoria room (&%(euphoria)s) '
 # definition has an off-by-one error.
 EUPHORIA_ID_EPOCH = 1417305600
 
+# A slightly reduced version of Instant's URL regex.
+URL_WHITELIST = re.compile(r'^([a-zA-Z]+:(//)?)?([a-zA-Z0-9._~-]+@)?'
+    '([a-zA-Z0-9.-]+)(:[0-9]+)?(/[^>]*)?$')
+
+# Approximation of URL-s that Euphoria would auto-embed.
+IMAGE_URL = re.compile(r'^(https?://)?((i\.)?imgur\.com|i\.ytimg\.com|'
+    r'imgs\.xkcd\.com)\b')
+
 # Python's standard library is sometimes rather short-sighted, in particular
 # when it comes to inverses for some type conversions...
 def base_encode(number, base=10, pad=0):
@@ -615,7 +623,10 @@ class Nexus:
                 if (re.match(r'<!?$', text_before(idx)) and
                         re.match(r'^>', text_after(idx))):
                     continue
-                parsed[idx] = (tp, text, '<', '>')
+                if not URL_WHITELIST.match(text):
+                    continue
+                prefix = '<!' if IMAGE_URL.match(text) else '<'
+                parsed[idx] = (tp, text, prefix, '>')
         res = []
         for item in parsed:
             if len(item) > 2:
