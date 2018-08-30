@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: ascii -*-
 
-import os
+import os, re
 import collections
 import threading
 import json
@@ -11,6 +11,8 @@ import sqlite3
 
 import basebot
 import instabot
+
+import autolinker
 
 INSTANT_ROOM_TEMPLATE = os.environ.get('INSTANT_ROOM_TEMPLATE',
                                        'wss://instant.leet.nu/room/{}/ws')
@@ -583,6 +585,8 @@ class Nexus:
                              if k in ('platform', 'euphoria_id', 'instant_id',
                                       'nick', 'delay')},), _run=False)
             entry = self._get_user(data)
+            data['text'] = self.translate_message_text(entry['platform'],
+                                                       data['text'])
             entry['actions'].append(data)
             self.scheduler.add_now(lambda: self._perform_actions((entry,)))
             if not entry['ignore'] and data['text'].startswith('!'):
@@ -597,6 +601,28 @@ class Nexus:
                 ping_matches(tokens[1], NICKNAME)):
             reply(HELP_TEMPLATE % {'euphoria': self.euphoria_bot.roomname,
                                    'instant': self.instant_bot.roomname})
+
+    def translate_message_text(self, platform, text):
+        def text_before(idx):
+            return '' if idx == 0 else parsed[idx - 1][1]
+        def text_after(idx):
+            return '' if idx == len(parsed) - 1 else parsed[idx + 1][1]
+        # Instant -> Euphoria is the identity transform.
+        if platform == 'instant': return text
+        parsed = list(autolinker.autolink(text))
+        for idx, (tp, text) in enumerate(parsed):
+            if tp == 'link':
+                if (re.match(r'<!?$', text_before(idx)) and
+                        re.match(r'^>', text_after(idx))):
+                    continue
+                parsed[idx] = (tp, text, '<', '>')
+        res = []
+        for item in parsed:
+            if len(item) > 2:
+                res.extend((item[2], item[1], item[3]))
+            else:
+                res.append(item[1])
+        return ''.join(res)
 
     def add_mapping(self, data):
         self.messages.update_ids('euphoria',
@@ -640,11 +666,14 @@ class Nexus:
             #       messages were missed after a reconnect.
             for msg in logs:
                 if after is not None and mapping[msg.id] < after: continue
-                result.append({'id': mapping[msg.id],
-                               'parent': mapping[msg.parent],
-                               'nick': msg.sender.name,
-                               'text': msg.content,
-                               'timestamp': msg.time * 1000})
+                result.append({
+                    'id': mapping[msg.id],
+                    'parent': mapping[msg.parent],
+                    'nick': msg.sender.name,
+                    'text': self.translate_message_text('euphoria',
+                                                        msg.content),
+                    'timestamp': msg.time * 1000
+                })
             callback(result)
         if platform != 'instant':
             raise RuntimeError('Cannot query messages from Instant for '
