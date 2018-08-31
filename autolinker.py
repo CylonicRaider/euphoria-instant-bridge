@@ -100,3 +100,14 @@ def autolink(source):
             yield ('link', url)
     # Yield the remainder of the source.
     if idx != end: yield ('text', source[idx:])
+
+def is_link(text):
+    """
+    Return whether all of the given text would be recognized by the
+    auto-linker as a single link.
+
+    Note that the actual interpretation of a link depends on context beyond
+    the link itself.
+    """
+    parts = tuple(autolink(text))
+    return (len(parts) == 1 and parts[0][0] in ('link', 'email'))

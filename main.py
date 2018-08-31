@@ -28,9 +28,12 @@ HELP_TEMPLATE = ('I relay messages between a Euphoria room (&%(euphoria)s) '
 # definition has an off-by-one error.
 EUPHORIA_ID_EPOCH = 1417305600
 
-# A slightly reduced version of Instant's URL regex.
-URL_WHITELIST = re.compile(r'^([a-zA-Z]+:(//)?)?([a-zA-Z0-9._~-]+@)?'
-    '([a-zA-Z0-9.-]+)(:[0-9]+)?(/[^>]*)?$')
+# Instant's URL regex.
+INSTANT_URL_RE = re.compile(r'((?!javascript:)[a-zA-Z]+:(//)?)?'
+    r'([a-zA-Z0-9._~-]+@)?([a-zA-Z0-9.-]+)(:[0-9]+)?(/[^>]*)?')
+
+# Extended version of the URL regex.
+INSTANT_URL_SEARCH = re.compile('<!?(' + INSTANT_URL_RE.pattern + ')>')
 
 # Approximation of URL-s that Euphoria would auto-embed.
 IMAGE_URL = re.compile(r'^(https?://)?((i\.)?imgur\.com|i\.ytimg\.com|'
@@ -615,25 +618,43 @@ class Nexus:
             return '' if idx == 0 else parsed[idx - 1][1]
         def text_after(idx):
             return '' if idx == len(parsed) - 1 else parsed[idx + 1][1]
-        # Instant -> Euphoria is the identity transform.
-        if platform == 'instant': return text
-        parsed = list(autolinker.autolink(text))
-        for idx, (tp, text) in enumerate(parsed):
-            if tp == 'link':
-                if (re.match(r'<!?$', text_before(idx)) and
-                        re.match(r'^>', text_after(idx))):
-                    continue
-                if not URL_WHITELIST.match(text):
-                    continue
-                prefix = '<!' if IMAGE_URL.match(text) else '<'
-                parsed[idx] = (tp, text, prefix, '>')
-        res = []
-        for item in parsed:
-            if len(item) > 2:
-                res.extend((item[2], item[1], item[3]))
-            else:
-                res.append(item[1])
-        return ''.join(res)
+        if platform == 'euphoria':
+            # For Euphoria -> Instant, run the auto-linker and enclose
+            # appropriate matches in Instant's sigils.
+            parsed = list(autolinker.autolink(text))
+            for idx, (tp, text) in enumerate(parsed):
+                if tp == 'link':
+                    if (re.match(r'<!?$', text_before(idx)) and
+                            re.match(r'^>', text_after(idx))):
+                        continue
+                    m = INSTANT_URL_RE.search(text)
+                    if not m or m.start() != 0 or m.end() != len(text):
+                        continue
+                    prefix = '<!' if IMAGE_URL.match(text) else '<'
+                    parsed[idx] = (tp, text, prefix, '>')
+            res = []
+            for item in parsed:
+                if len(item) > 2:
+                    res.extend((item[2], item[1], item[3]))
+                else:
+                    res.append(item[1])
+            return ''.join(res)
+        else:
+            # For Instant -> Euphoria, remove the sigils.
+            res, idx, end = [], 0, len(text)
+            while idx < end:
+                m = INSTANT_URL_SEARCH.search(text, idx)
+                if not m: break
+                res.append(text[idx:m.start()])
+                idx = m.end()
+                # Only change things that will (hopefully) be recognized as
+                # hyperlinks.
+                if autolinker.is_link(m.group(1)):
+                    res.append(m.group(1))
+                else:
+                    res.append(m.group())
+            if idx != end: res.append(text[idx:])
+            return ''.join(res)
 
     def add_mapping(self, data):
         self.messages.update_ids('euphoria',
