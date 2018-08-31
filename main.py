@@ -748,7 +748,10 @@ class Nexus:
             return lambda: self._perform_actions((e,))
         now = self.scheduler.time()
         for e in entries:
-            if e['ignore'] or not e['actions']:
+            if e['ignore']:
+                e['actions'].clear()
+                continue
+            elif not e['actions']:
                 continue
             elif e['delay'] is not None and e['delay'] > now:
                 continue
