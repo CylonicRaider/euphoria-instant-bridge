@@ -319,6 +319,9 @@ class MessageStore:
 
     def init(self):
         self.conn = sqlite3.connect(self.dbname, check_same_thread=False)
+        sync = os.environ.get('BRIDGE_DB_SYNC', '')
+        if re.match('^[A-Za-z09-9]+$', sync):
+            self.conn.execute('PRAGMA synchronous = ' + sync)
         self.curs = self.conn.cursor()
         # Either ID can be null to signal that it is not available yet.
         self.curs.execute('CREATE TABLE IF NOT EXISTS id_map ( '
