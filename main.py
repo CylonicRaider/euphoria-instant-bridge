@@ -19,6 +19,7 @@ INSTANT_ROOM_TEMPLATE = os.environ.get('INSTANT_ROOM_TEMPLATE',
 
 NICKNAME = 'bridge'
 SURROGATE_DELAY = 2
+CLEANUP_DELAY = 2
 MAX_LOG_REQUEST = 100
 
 HELP_TEMPLATE = ('I relay messages between a Euphoria room (&%(euphoria)s) '
@@ -127,6 +128,11 @@ class InstantBot(instabot.Bot):
         self.send_raw(json.dumps(packet, separators=(',', ':')))
 
 class EuphoriaBridgeBot(EuphoriaBot):
+    def handle_close(self, ok, final):
+        EuphoriaBot.handle_close(self, ok, final)
+        if self.manager:
+            self.manager.nexus.cleanup_delayed('euphoria')
+
     def handle_any(self, packet):
         EuphoriaBot.handle_any(self, packet)
         add_users, remove_users, users_new = None, None, False
@@ -193,6 +199,11 @@ class InstantBridgeBot(InstantBot):
     def on_open(self):
         InstantBot.on_open(self)
         self.send_broadcast({'type': 'who'})
+
+    def on_close(self, final):
+        InstantBot.on_close(self, final)
+        if self.manager:
+            self.manager.nexus.cleanup_delayed('instant')
 
     def handle_identity(self, content, rawmsg):
         InstantBot.handle_identity(self, content, rawmsg)
@@ -529,11 +540,12 @@ class Nexus:
                 ret['instant_id'] = instant_id
                 self.instant_users[instant_id] = ret
         if create:
+            ret.setdefault('platform', None)
             ret.setdefault('ignore', False)
+            ret.setdefault('cleanup', False)
             ret.setdefault('delay', None)
             ret.setdefault('nick', None)
             ret.setdefault('actions', collections.deque())
-            ret.setdefault('platform', None)
         return ret
 
     def add_users(self, users, new=False, _run=True):
@@ -549,6 +561,8 @@ class Nexus:
                 if u.get('nick'):
                     entry['nick'] = u['nick']
                     entry['actions'].append(u)
+                if new:
+                    entry['cleanup'] = None
                 if delay is not None and (entry['delay'] is None or
                                           entry['delay'] < delay):
                     entry['delay'] = delay
@@ -592,6 +606,17 @@ class Nexus:
             for u in users:
                 entry = self._get_user(u)
                 entry['ignore'] = True
+
+    def cleanup_delayed(self, platform):
+        with self.lock:
+            if platform == 'euphoria':
+                entries = self.euphoria_users
+            else:
+                entries = self.instant_users
+            timestamp = self.scheduler.time() + CLEANUP_DELAY
+            for e in entries.values():
+                e['cleanup'] = timestamp
+            self.scheduler.add_abs(timestamp, self._do_delayed_cleanup)
 
     def handle_message(self, data):
         with self.lock:
@@ -790,6 +815,18 @@ class Nexus:
                 if action.get('remove'):
                     bot.close()
                     self.remove_bot(e)
+
+    def _do_delayed_cleanup(self):
+        with self.lock:
+            now = self.scheduler.time()
+            toremove = []
+            for e in self.euphoria_users.values():
+                if e['cleanup'] is not None and e['cleanup'] <= now:
+                    toremove.append(e)
+            for e in self.instant_users.values():
+                if e['cleanup'] is not None and e['cleanup'] <= now:
+                    toremove.append(e)
+            self.remove_users(toremove)
 
     def start(self):
         self.logger.info('Starting...')
