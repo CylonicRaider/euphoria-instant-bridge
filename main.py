@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: ascii -*-
 
-import os, re
+import os, re, time
 import collections
 import threading
 import json
@@ -14,14 +14,17 @@ import instabot
 
 import autolinker
 
+# Dynamic configuration.
 INSTANT_ROOM_TEMPLATE = os.environ.get('INSTANT_ROOM_TEMPLATE',
                                        'wss://instant.leet.nu/room/{}/ws')
 
+# Static configuration.
 NICKNAME = 'bridge'
 SURROGATE_DELAY = 2
 CLEANUP_DELAY = 2
 MAX_LOG_REQUEST = 100
 
+# The template for the bot's help message.
 HELP_TEMPLATE = ('I relay messages between a Euphoria room (&%(euphoria)s) '
     'and an Instant room (&%(instant)s).')
 
@@ -486,6 +489,7 @@ class Nexus:
         self.instant_bot = None
         self.messages = MessageStore(dbname)
         self.scheduler = instabot.EventScheduler()
+        self.start_time = None
         self.parent = None
         self.lock = threading.RLock()
         self.seq_lock = threading.RLock()
@@ -635,11 +639,23 @@ class Nexus:
                 self.handle_command(tokens, reply)
 
     def handle_command(self, tokens, reply):
+        def command_matches(cmdname, short=True):
+            return (tokens[0] == cmdname and (len(tokens) == 1 and short or
+                len(tokens) == 2 and ping_matches(tokens[1], NICKNAME)))
         normnick = basebot.normalize_nick
-        if tokens[0] == '!help' and (len(tokens) == 1 or
-                ping_matches(tokens[1], NICKNAME)):
+        if command_matches('!ping'):
+            reply('Pong')
+        elif command_matches('!help'):
             reply(HELP_TEMPLATE % {'euphoria': self.euphoria_bot.roomname,
                                    'instant': self.instant_bot.roomname})
+        elif command_matches('!uptime', short=False):
+            if self.start_time is None:
+                reply('/me Uptime information is N/A')
+                return
+            uptime = time.time() - self.start_time
+            reply('/me has been up since %s (%s)' % (
+                basebot.format_datetime(self.start_time),
+                basebot.format_delta(uptime)))
 
     def translate_message_text(self, platform, text):
         def text_before(idx):
@@ -829,6 +845,7 @@ class Nexus:
             self.remove_users(toremove)
 
     def start(self):
+        self.start_time = time.time()
         self.logger.info('Starting...')
         self.messages.init()
         res = self.messages.gc()
