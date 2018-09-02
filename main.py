@@ -546,7 +546,7 @@ class Nexus:
         if create:
             ret.setdefault('platform', None)
             ret.setdefault('ignore', False)
-            ret.setdefault('cleanup', False)
+            ret.setdefault('cleanup', None)
             ret.setdefault('delay', None)
             ret.setdefault('nick', None)
             ret.setdefault('actions', collections.deque())
@@ -619,6 +619,7 @@ class Nexus:
                 entries = self.instant_users
             timestamp = self.scheduler.time() + CLEANUP_DELAY
             for e in entries.values():
+                if e['ignore']: continue
                 e['cleanup'] = timestamp
             self.scheduler.add_abs(timestamp, self._do_delayed_cleanup)
 
