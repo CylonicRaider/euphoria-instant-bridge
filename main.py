@@ -598,9 +598,9 @@ class Nexus:
     def remove_group(self, group):
         with self.lock:
             toremove = []
-            toremove.extend(u for u in self.euphoria_users
+            toremove.extend(u for u in self.euphoria_users.values()
                             if u.get('group') == group)
-            toremove.extend(u for u in self.instant_users
+            toremove.extend(u for u in self.instant_users.values()
                             if u.get('group') == group)
             self.remove_users(toremove)
 
