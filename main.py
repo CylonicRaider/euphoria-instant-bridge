@@ -64,6 +64,14 @@ def ping_matches(ping, nick):
     if not ping.startswith('@'): return False
     return basebot.normalize_nick(ping[1:]) == basebot.normalize_nick(nick)
 
+class ErrorLoggingEventScheduler(instabot.EventScheduler):
+    def __init__(self, *args, **kwds):
+        instabot.EventScheduler.__init__(self, *args, **kwds)
+        self.logger = logging.getLogger('scheduler')
+
+    def on_error(self, exc):
+        self.logger.error(exc)
+
 class EuphoriaBot(basebot.HeimEndpoint):
     def submit_post(self, parent, text, sequence=None, callback=None):
         packet = {'type': 'send',
@@ -488,7 +496,7 @@ class Nexus:
         self.euphoria_bot = None
         self.instant_bot = None
         self.messages = MessageStore(dbname)
-        self.scheduler = instabot.EventScheduler()
+        self.scheduler = ErrorLoggingEventScheduler()
         self.start_time = None
         self.parent = None
         self.lock = threading.RLock()
