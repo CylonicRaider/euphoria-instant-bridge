@@ -853,10 +853,12 @@ class Nexus:
                     toremove.append(e)
             self.remove_users(toremove)
 
+    def init(self):
+        self.messages.init()
+
     def start(self):
         self.start_time = time.time()
         self.logger.info('Starting...')
-        self.messages.init()
         res = self.messages.gc()
         if res == 1:
             self.logger.warning('Discarded %s incomplete mapping', res)
@@ -938,6 +940,7 @@ def main():
     nexus = Nexus(arguments.db)
     nexus.make_bot = make_bot
     bot_counter = [0]
+    root_mgr = basebot.BotManager(botname='Euphoria/Instant bridge')
     euph_mgr = EuphoriaBotManager(botcls=EuphoriaSendBot,
         botname='EuphoriaBridge', nexus=nexus)
     inst_mgr = InstantBotManager(botcls=InstantSendBot,
@@ -948,13 +951,15 @@ def main():
         botname='bridge', roomname=arguments.instant_room, nickname=NICKNAME)
     euph_mgr.add_bot(nexus.euphoria_bot)
     inst_mgr.add_bot(nexus.instant_bot)
-    euph_mgr.add_child(inst_mgr)
-    euph_mgr.add_child(nexus)
+    root_mgr.add_child(euph_mgr)
+    root_mgr.add_child(inst_mgr)
+    root_mgr.add_child(nexus)
     try:
-        euph_mgr.main()
+        nexus.init()
+        root_mgr.main()
     except (KeyboardInterrupt, SystemExit) as exc:
-        euph_mgr.shutdown()
-        euph_mgr.join()
+        root_mgr.shutdown()
+        root_mgr.join()
         if isinstance(exc, SystemExit): raise
     finally:
         nexus.close()
