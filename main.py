@@ -70,7 +70,8 @@ class ErrorLoggingEventScheduler(instabot.EventScheduler):
         self.logger = logging.getLogger('scheduler')
 
     def on_error(self, exc):
-        self.logger.error(exc)
+        self.logger.error('Exception while processing request: %r', exc,
+                          exc_info=True)
 
 class EuphoriaBot(basebot.HeimEndpoint):
     def submit_post(self, parent, text, sequence=None, callback=None):
