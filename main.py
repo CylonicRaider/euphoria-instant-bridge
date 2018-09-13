@@ -20,9 +20,12 @@ INSTANT_ROOM_TEMPLATE = os.environ.get('INSTANT_ROOM_TEMPLATE',
 
 # Static configuration.
 NICKNAME = 'bridge'
+MAX_LOG_REQUEST = 100
+
 SURROGATE_DELAY = 2
 CLEANUP_DELAY = 2
-MAX_LOG_REQUEST = 100
+GC_TIMEOUT = 30
+GC_INTERVAL = 60
 
 # The template for the bot's help message.
 HELP_TEMPLATE = ('I relay messages between a Euphoria room (&%(euphoria)s) '
@@ -346,18 +349,33 @@ class MessageStore:
         if re.match('^[A-Za-z09-9]+$', sync):
             self.conn.execute('PRAGMA synchronous = ' + sync)
         self.curs = self.conn.cursor()
-        # Either ID can be null to signal that it is not available yet.
         self.curs.execute('CREATE TABLE IF NOT EXISTS id_map ( '
+                # Either ID can be NULL to signal that it is pending addition.
                 'euphoria TEXT UNIQUE, '
-                'instant TEXT UNIQUE'
+                'instant TEXT UNIQUE, '
+                'expires REAL'
             ')')
+        self.curs.execute('PRAGMA table_info(id_map)')
+        columns = set(i[1] for i in self.curs.fetchall())
+        if 'expires' not in columns:
+            self.curs.execute('ALTER TABLE id_map ADD COLUMN expires REAL')
 
-    def gc(self):
+    def gc(self, conditional=True):
         with self.lock:
-            self.curs.execute('DELETE FROM id_map WHERE euphoria IS NULL OR '
-                'instant IS NULL')
+            if conditional:
+                # HACK: Interpolating float into SQL.
+                condition = ('(euphoria IS NULL OR instant IS NULL) '
+                    'AND (expires IS NULL OR expires <= %r)' % time.time())
+            else:
+                condition = 'euphoria IS NULL OR instant IS NULL'
+            self.curs.execute('SELECT euphoria, instant FROM id_map WHERE ' +
+                              condition)
+            pairs = self.curs.fetchall()
+            self.curs.execute('DELETE FROM id_map WHERE ' + condition)
             self.conn.commit()
-            return self.curs.rowcount
+            for euphoria, instant in pairs:
+                self._run_watchers(euphoria or Ellipsis, instant or Ellipsis)
+            return len(pairs)
 
     def close(self):
         with self.lock:
@@ -444,10 +462,15 @@ class MessageStore:
         else:
             items = [(e, i) for i, e in mapping.items() if i is not None]
         with self.lock:
+            expires = time.time() + GC_TIMEOUT
             for euphoria, instant in items:
+                if euphoria is None or instant is None:
+                    exp = expires
+                else:
+                    exp = None
                 self.curs.execute('INSERT OR REPLACE '
-                    'INTO id_map(euphoria, instant) '
-                    'VALUES (?, ?)', (euphoria, instant))
+                    'INTO id_map(euphoria, instant, expires) '
+                    'VALUES (?, ?, ?)', (euphoria, instant, exp))
                 self._run_watchers(euphoria, instant)
             self.conn.commit()
 
@@ -854,17 +877,33 @@ class Nexus:
                     toremove.append(e)
             self.remove_users(toremove)
 
+    def _gc_thread(self):
+        while 1:
+            self._do_gc()
+            time.sleep(GC_INTERVAL)
+
+    def _do_gc(self, initial=False):
+        res = self.messages.gc(not initial)
+        if res == 1:
+            self.logger.warning('Garbage-collected %s incomplete mapping',
+                                res)
+        elif res > 1:
+            self.logger.warning('Garbage-collected %s incomplete mappings',
+                                res)
+
     def init(self):
         self.messages.init()
 
     def start(self):
         self.start_time = time.time()
         self.logger.info('Starting...')
-        res = self.messages.gc()
-        if res == 1:
-            self.logger.warning('Discarded %s incomplete mapping', res)
-        elif res > 1:
-            self.logger.warning('Discarded %s incomplete mappings', res)
+        self._do_gc(True)
+        # FIXME: Sometimes, the Instant surrogates lose messages when
+        #        reconnecting while sending a message. A "proper" transparent
+        #        reconnect implementation would fix this; we work around the
+        #        consequence of log loading being stuck forever (because of
+        #        unresolved ID mappings) until then.
+        basebot.spawn_thread(self._gc_thread)
         basebot.spawn_thread(self.scheduler.main)
 
     def shutdown(self):
@@ -952,9 +991,9 @@ def main():
         botname='bridge', roomname=arguments.instant_room, nickname=NICKNAME)
     euph_mgr.add_bot(nexus.euphoria_bot)
     inst_mgr.add_bot(nexus.instant_bot)
+    root_mgr.add_child(nexus)
     root_mgr.add_child(euph_mgr)
     root_mgr.add_child(inst_mgr)
-    root_mgr.add_child(nexus)
     try:
         nexus.init()
         root_mgr.main()
