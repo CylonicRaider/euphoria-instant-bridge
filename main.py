@@ -360,21 +360,33 @@ class MessageStore:
         if 'expires' not in columns:
             self.curs.execute('ALTER TABLE id_map ADD COLUMN expires REAL')
 
-    def gc(self, conditional=True):
+    def gc(self, initial=True):
         with self.lock:
-            if conditional:
+            if initial:
+                condition = 'euphoria IS NULL OR instant IS NULL'
+            else:
                 # HACK: Interpolating float into SQL.
                 condition = ('(euphoria IS NULL OR instant IS NULL) '
                     'AND (expires IS NULL OR expires <= %r)' % time.time())
-            else:
-                condition = 'euphoria IS NULL OR instant IS NULL'
             self.curs.execute('SELECT euphoria, instant FROM id_map WHERE ' +
                               condition)
             pairs = self.curs.fetchall()
             self.curs.execute('DELETE FROM id_map WHERE ' + condition)
+            if initial:
+                for euphoria, instant in pairs:
+                    self._run_watchers(euphoria or Ellipsis,
+                                       instant or Ellipsis)
+            else:
+                euphoria_ids, instant_ids = [], []
+                for e, i in pairs:
+                    if e is not None: euphoria_ids.append(e)
+                    if i is not None: instant_ids.append(i)
+                if euphoria_ids:
+                    self.translate_ids('euphoria', euphoria_ids,
+                                       _commit=False)
+                if instant_ids:
+                    self.translate_ids('instant', instant_ids, _commit=False)
             self.conn.commit()
-            for euphoria, instant in pairs:
-                self._run_watchers(euphoria or Ellipsis, instant or Ellipsis)
             return len(pairs)
 
     def close(self):
@@ -398,7 +410,7 @@ class MessageStore:
             return {'euphoria': (emin, emax, ecnt),
                     'instant': (imin, imax, icnt)}
 
-    def translate_ids(self, platform, ids, create=True):
+    def translate_ids(self, platform, ids, create=True, _commit=True):
         ret = dict.fromkeys(ids, Ellipsis)
         with self.lock:
             if platform == 'euphoria':
@@ -423,7 +435,7 @@ class MessageStore:
                 for k in ret:
                     if ret[k] is Ellipsis:
                         ret[k] = self.generate_id(platform, k, _commit=False)
-                self.conn.commit()
+                if _commit: self.conn.commit()
             return ret
 
     def translate_id(self, platform, ident, create=True):
@@ -883,7 +895,7 @@ class Nexus:
             time.sleep(GC_INTERVAL)
 
     def _do_gc(self, initial=False):
-        res = self.messages.gc(not initial)
+        res = self.messages.gc(initial)
         if res == 1:
             self.logger.warning('Garbage-collected %s incomplete mapping',
                                 res)
