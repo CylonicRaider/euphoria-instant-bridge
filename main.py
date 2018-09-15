@@ -916,7 +916,7 @@ class Nexus:
         #        consequence of log loading being stuck forever (because of
         #        unresolved ID mappings) until then.
         basebot.spawn_thread(self._gc_thread)
-        basebot.spawn_thread(self.scheduler.main)
+        basebot.spawn_thread(self.scheduler.run)
 
     def shutdown(self):
         self.scheduler.shutdown()
