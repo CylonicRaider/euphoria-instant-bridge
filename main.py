@@ -31,7 +31,7 @@ GC_INTERVAL = 60
 HELP_TEMPLATE = ('I relay messages between a Euphoria room (&%(euphoria)s) '
     'and an Instant room (&%(instant)s).')
 
-# UNIX timestamp for 2014-12-00 00:00:00 UTC. Note that the original
+# UNIX timestamp for 2014-12-00 00:00:00 UTC [sic]. Yes, the original
 # definition has an off-by-one error.
 EUPHORIA_ID_EPOCH = 1417305600
 
