@@ -110,6 +110,13 @@ class InstantBot(instabot.Bot):
     def on_connection_error(self, exc):
         self.logger.warning('Exception while connecting: %r', exc)
 
+    def handle_identity(self, content, rawmsg):
+        instabot.Bot.handle_identity(self, content, rawmsg)
+        self.logger.info('User ID: %r; UUID: %r' % (
+            self.identity['id'],
+            self.identity['uuid']
+        ))
+
     def handle_response(self, content, rawmsg):
         instabot.Bot.handle_response(self, content, rawmsg)
         cb = self.callbacks.pop(content.get('seq'), None)
@@ -275,6 +282,7 @@ class EuphoriaSendBot(EuphoriaBot):
         EuphoriaBot.__init__(self, **config)
         self.ready = False
         self.on_ready = config.get('on_ready')
+        self.counterpart_info = config.get('counterpart_info')
 
     def on_hello_event(self, packet):
         EuphoriaBot.on_hello_event(self, packet)
@@ -295,6 +303,13 @@ class EuphoriaSendBot(EuphoriaBot):
 
     def handle_login(self):
         EuphoriaBot.handle_login(self)
+        if self.counterpart_info:
+            self.logger.info('Mirroring %s user %r (%s ID %s)' % (
+                self.counterpart_info['platform'],
+                self.counterpart_info['nick'],
+                self.counterpart_info['id_type'],
+                self.counterpart_info['id']
+            ))
         if not self.ready:
             self.ready = True
             if self.on_ready: self.on_ready()
@@ -304,6 +319,7 @@ class InstantSendBot(InstantBot):
         InstantBot.__init__(self, roomname, nickname, **kwds)
         self.ready = False
         self.on_ready = kwds.get('on_ready')
+        self.counterpart_info = kwds.get('counterpart_info')
 
     def handle_identity(self, content, rawmsg):
         InstantBot.handle_identity(self, content, rawmsg)
@@ -311,6 +327,13 @@ class InstantSendBot(InstantBot):
             'platform': 'instant',
             'instant_id': content['data']['id']
         },))
+        if self.counterpart_info:
+            self.logger.info('Mirroring %s user %r (%s ID %s)' % (
+                self.counterpart_info['platform'],
+                self.counterpart_info['nick'],
+                self.counterpart_info['id_type'],
+                self.counterpart_info['id']
+            ))
         if not self.ready:
             self.ready = True
             if self.on_ready: self.on_ready()
@@ -965,14 +988,24 @@ def main():
         # platform here.
         bot_counter[0] += 1
         if entry['platform'] == 'euphoria':
-            bot = inst_mgr.make_bot(botname='surrogate#%s' % bot_counter[0],
-                                    roomname=arguments.instant_room,
-                                    on_ready=on_ready)
+            bot = inst_mgr.make_bot(
+                botname='surrogate#%s' % bot_counter[0],
+                roomname=arguments.instant_room,
+                on_ready=on_ready,
+                counterpart_info={'platform': 'Euphoria',
+                                  'nick': entry['nick'],
+                                  'id_type': 'session',
+                                  'id': entry['euphoria_id']})
             inst_mgr.add_bot(bot)
         else:
-            bot = euph_mgr.make_bot(botname='surrogate#%s' % bot_counter[0],
-                                    roomname=arguments.euphoria_room,
-                                    on_ready=on_ready)
+            bot = euph_mgr.make_bot(
+                botname='surrogate#%s' % bot_counter[0],
+                roomname=arguments.euphoria_room,
+                on_ready=on_ready,
+                counterpart_info={'platform': 'Instant',
+                                  'nick': entry['nick'],
+                                  'id_type': 'user',
+                                  'id': entry['instant_id']})
             euph_mgr.add_bot(bot)
         bot.start()
         return bot
