@@ -712,7 +712,7 @@ class Nexus:
                 len(tokens) == 2 and ping_matches(tokens[1], NICKNAME)))
         normnick = basebot.normalize_nick
         if command_matches('!ping'):
-            reply('Pong')
+            reply('Pong!')
         elif command_matches('!help'):
             reply(HELP_TEMPLATE % {'euphoria': self.euphoria_bot.roomname,
                                    'instant': self.instant_bot.roomname})
