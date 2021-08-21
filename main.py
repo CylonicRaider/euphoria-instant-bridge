@@ -91,28 +91,30 @@ class EuphoriaBot(basebot.HeimEndpoint):
 class InstantBot(instabot.Bot):
     def __init__(self, roomname, nickname=Ellipsis, **kwds):
         url = INSTANT_ROOM_TEMPLATE.format(roomname)
+        br_logger = kwds.pop('logger', None)
         instabot.Bot.__init__(self, url, nickname, keepalive=True, **kwds)
+        if br_logger is None: br_logger = logging.getLogger()
         self.roomname = roomname
         self.manager = kwds.get('manager')
-        self.logger = kwds.get('logger', logging.getLogger())
+        self.br_logger = br_logger
         self.lock = threading.RLock()
         self.callbacks = {}
         self._sent_nick = Ellipsis
 
     def connect(self):
-        self.logger.info('Connecting to %s...', self.url)
+        self.br_logger.info('Connecting to %s...', self.url)
         return instabot.Bot.connect(self)
 
     def on_open(self):
         instabot.Bot.on_open(self)
-        self.logger.info('Connected')
+        self.br_logger.info('Connected')
 
     def on_connection_error(self, exc):
-        self.logger.warning('Exception while connecting: %r', exc)
+        self.br_logger.warning('Exception while connecting: %r', exc)
 
     def handle_identity(self, content, rawmsg):
         instabot.Bot.handle_identity(self, content, rawmsg)
-        self.logger.info('User ID: %r; UUID: %r' % (
+        self.br_logger.info('User ID: %r; UUID: %r' % (
             self.identity['id'],
             self.identity['uuid']
         ))
@@ -124,14 +126,14 @@ class InstantBot(instabot.Bot):
 
     def on_close(self, final):
         instabot.Bot.on_close(self, final)
-        self.logger.info('Closing')
+        self.br_logger.info('Closing')
         # Instabot does not expose the "ok" parameter.
         if self.manager: self.manager.handle_close(self, True, final)
 
     def send_nick(self, peer=None):
         if self.nickname != self._sent_nick:
             if self.nickname is not None:
-                self.logger.info('Setting nickname: %r', self.nickname)
+                self.br_logger.info('Setting nickname: %r', self.nickname)
             self._sent_nick = self.nickname
         return instabot.Bot.send_nick(self, peer)
 
@@ -328,7 +330,7 @@ class InstantSendBot(InstantBot):
             'instant_id': content['data']['id']
         },))
         if self.counterpart_info:
-            self.logger.info('Mirroring %s user %r (%s ID %s)' % (
+            self.br_logger.info('Mirroring %s user %r (%s ID %s)' % (
                 self.counterpart_info['platform'],
                 self.counterpart_info['nick'],
                 self.counterpart_info['id_type'],
