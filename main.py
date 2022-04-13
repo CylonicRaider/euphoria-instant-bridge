@@ -36,11 +36,25 @@ HELP_TEMPLATE = ('I relay messages between a Euphoria room (&%(euphoria)s) '
 EUPHORIA_ID_EPOCH = 1417305600
 
 # Instant's URL regex.
-INSTANT_URL_RE = re.compile(r'((?!javascript:)[a-zA-Z]+:(//)?)?'
-    r'([a-zA-Z0-9._~-]+@)?([a-zA-Z0-9.-]+)(:[0-9]+)?(/[^>]*)?')
+INSTANT_URL_RE = re.compile('('
+    # Alternative 1: Traditional URL syntax, mildly abused to allow starting
+    #                immediately at the host name.
+    # Scheme.
+    '((?!javascript:)[a-zA-Z+-]+://)?'
+    # Userinfo.
+    '([a-zA-Z0-9%._~-]+@)?'
+    # Host.
+    '([a-zA-Z0-9.-]+|\\[[a-zA-Z0-9.:-]+\\])'
+    # Port.
+    '(:[0-9]+)?'
+    # Path, query, fragment.
+    '(/[^>]*)?|'
+    # Alternative 2: Scheme with bare scheme-specific-part.
+    '((?!javascript:)[a-zA-Z+-]+:)([^/][^>]*)?'
+')')
 
 # Extended version of the URL regex.
-INSTANT_URL_SEARCH = re.compile('<!?(' + INSTANT_URL_RE.pattern + ')>')
+INSTANT_URL_SEARCH = re.compile('<!?' + INSTANT_URL_RE.pattern + '>')
 
 # Approximation of URL-s that Euphoria would auto-embed.
 IMAGE_URL = re.compile(r'^(https?://)?((i\.)?imgur\.com|i\.ytimg\.com|'
