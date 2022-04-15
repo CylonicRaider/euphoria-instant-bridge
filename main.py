@@ -804,7 +804,7 @@ class Nexus:
             self.scheduler.add_now(lambda: run_query(result))
         def run_query(translated):
             # Actually execute the log query.
-            # See process_result() for the apparently lacking  "after"
+            # See process_result() for the apparently lacking "after"
             # parameter.
             self.euphoria_bot.query_logs(translated, None, maxlen,
                                          process_logs)
