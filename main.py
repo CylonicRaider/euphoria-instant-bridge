@@ -594,17 +594,23 @@ class Nexus:
         else:
             return 'i/' + entry['instant_id']
 
-    def get_bot(self, entry, on_ready):
+    def get_bot(self, entry, create=True, on_ready=None):
         identity = self._bot_ident(entry)
         with self.bot_lock:
-            if identity not in self.bots:
+            if identity in self.bots:
+                pass
+            elif not create:
+                return None
+            else:
                 self.bots[identity] = self.make_bot(entry, on_ready)
             return self.bots[identity]
 
     def remove_bot(self, entry):
         identity = self._bot_ident(entry)
         with self.bot_lock:
-            self.bots.pop(identity, None)
+            bot = self.bots.pop(identity, None)
+        if bot is not None:
+            bot.close()
 
     def make_bot(self, entry, on_ready):
         return None
@@ -878,13 +884,15 @@ class Nexus:
         for e in entries:
             if e['ignore']:
                 e['actions'].clear()
+                if self.get_bot(e, create=False):
+                    self.remove_bot(e)
                 continue
             elif not e['actions']:
                 continue
             elif e['delay'] is not None and e['delay'] > now:
                 continue
             runner = make_runner(e)
-            bot = self.get_bot(e, runner)
+            bot = self.get_bot(e, on_ready=runner)
             if not bot.ready: continue
             while 1:
                 try:
@@ -913,7 +921,6 @@ class Nexus:
                     bot.submit_post(tr_parent, action['text'],
                         e['platform'] + ':' + action['msgid'])
                 if action.get('remove'):
-                    bot.close()
                     self.remove_bot(e)
 
     def _do_delayed_cleanup(self):
