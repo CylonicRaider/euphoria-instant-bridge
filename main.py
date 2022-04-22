@@ -48,9 +48,9 @@ INSTANT_URL_RE = re.compile('('
     # Port.
     '(:[0-9]+)?'
     # Path, query, fragment.
-    '(/[^>]*)?|'
+    '(/[^>\\s]*)?|'
     # Alternative 2: Scheme with bare scheme-specific-part.
-    '((?!javascript:)[a-zA-Z+-]+:)([^/][^>]*)?'
+    '((?!javascript:)[a-zA-Z+-]+:)([^/>\\s][^>\\s]*)?'
 ')')
 
 # Extended version of the URL regex.
